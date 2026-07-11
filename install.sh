@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VENV_DIR="${VENV_DIR:-/tmp/mmdet-venv}"
-MMDET_WHEEL_DIR="${MMDET_WHEEL_DIR:-/marimo/mmdet_code}"
+VENV_DIR="${VENV_DIR:-/marimo/mmdet-venv}"
 NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
 OPENCV_VERSION="${OPENCV_VERSION:-4.11.0.86}"
 
@@ -11,10 +10,10 @@ uv venv "$VENV_DIR" --python 3.11 --seed
 source "$VENV_DIR/bin/activate"
 
 # ------------------------------------------------------------------
-# Install PyTorch (CUDA 13.0)
+# Install PyTorch (CUDA 12.1)
 # ------------------------------------------------------------------
-python -m pip install torch torchvision \
-    --index-url https://download.pytorch.org/whl/cu130
+python -m pip install torch==2.1.0 torchvision==0.16.0 \
+    --index-url https://download.pytorch.org/whl/cu121
 
 python - <<'PY'
 import torch
@@ -47,7 +46,9 @@ nvcc --version
 # ------------------------------------------------------------------
 # Install MMCV
 # ------------------------------------------------------------------
-python -m pip install --force-reinstall "$MMDET_WHEEL_DIR"/mmcv-*.whl
+python -m pip install \
+    mmcv==2.1.0 \
+    -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1/index.html
 
 python - <<'PY'
 import torch, mmcv
@@ -56,14 +57,11 @@ print("mmcv :", mmcv.__version__)
 PY
 
 # ------------------------------------------------------------------
-# Install MMEngine
+# Install MMEngine + MMDetection
 # ------------------------------------------------------------------
-python -m pip install -U mmengine
-
-# ------------------------------------------------------------------
-# Install MMDetection
-# ------------------------------------------------------------------
-python -m pip install --force-reinstall "$MMDET_WHEEL_DIR"/mmdet-*.whl
+python -m pip install \
+    "mmengine>=0.7.1,<1.0.0" \
+    "mmdet==3.3.0"
 
 # ------------------------------------------------------------------
 # Pin NumPy + OpenCV
