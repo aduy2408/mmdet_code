@@ -4,6 +4,7 @@ set -euo pipefail
 VENV_DIR="${VENV_DIR:-/tmp/mmdet-venv}"
 MMDET_WHEEL_DIR="${MMDET_WHEEL_DIR:-/marimo/mmdet_code}"
 NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
+OPENCV_VERSION="${OPENCV_VERSION:-4.11.0.86}"
 
 uv venv "$VENV_DIR" --python 3.11 --seed
 # shellcheck disable=SC1091
@@ -65,9 +66,10 @@ python -m pip install -U mmengine
 python -m pip install --force-reinstall "$MMDET_WHEEL_DIR"/mmdet-*.whl
 
 # ------------------------------------------------------------------
-# Pin NumPy
+# Pin NumPy + OpenCV
 # ------------------------------------------------------------------
 python -m pip install --force-reinstall "numpy==${NUMPY_VERSION}"
+python -m pip install --force-reinstall --no-deps "opencv-python==${OPENCV_VERSION}"
 
 # ------------------------------------------------------------------
 # Verify
@@ -78,10 +80,12 @@ import mmcv
 import mmengine
 import mmdet
 import numpy as np
+import cv2
 
 print("torch    :", torch.__version__, "CUDA", torch.version.cuda)
 print("mmcv     :", mmcv.__version__)
 print("mmengine :", mmengine.__version__)
 print("mmdet    :", mmdet.__version__)
 print("numpy    :", np.__version__)
+print("opencv   :", cv2.__version__)
 PY
