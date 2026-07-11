@@ -124,4 +124,4 @@ work_dirs/
 
 data/
 .venv*/
-mmdetection/
+# mmdetection/
