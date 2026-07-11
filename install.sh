@@ -9,6 +9,8 @@ uv venv "$VENV_DIR" --python 3.11 --seed
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
 
+python -m pip install "setuptools==60.2.0"
+
 # ------------------------------------------------------------------
 # Install PyTorch (CUDA 12.1)
 # ------------------------------------------------------------------
