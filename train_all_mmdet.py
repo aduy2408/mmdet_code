@@ -271,6 +271,53 @@ def disable_pretrained(obj: Any) -> None:
             disable_pretrained(value)
 
 
+def checkpoint_state_dict(checkpoint_path: Path) -> dict[str, Any]:
+    import torch
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    if isinstance(checkpoint, dict):
+        for key in ("state_dict", "model", "ema"):
+            value = checkpoint.get(key)
+            if isinstance(value, dict):
+                return value
+    if isinstance(checkpoint, dict):
+        return checkpoint
+    raise TypeError(f"Unsupported checkpoint format: {checkpoint_path}")
+
+
+def candidate_checkpoint_keys(key: str, variant: str) -> list[str]:
+    keys = [key]
+    if variant == "dgfe_api" and key.startswith("neck."):
+        keys.insert(0, f"neck.base_neck.{key[len('neck.'):]}")  # wrapped neck
+    return keys
+
+
+def load_compatible_checkpoint(model: Any, checkpoint_path: Path, variant: str) -> None:
+    source_state = checkpoint_state_dict(checkpoint_path)
+    target_state = model.state_dict()
+    compatible = {}
+    skipped_shape = []
+
+    for src_key, value in source_state.items():
+        for dst_key in candidate_checkpoint_keys(src_key, variant):
+            if dst_key not in target_state:
+                continue
+            if tuple(target_state[dst_key].shape) != tuple(value.shape):
+                skipped_shape.append((src_key, dst_key, tuple(value.shape), tuple(target_state[dst_key].shape)))
+                continue
+            compatible[dst_key] = value
+            break
+
+    missing, unexpected = model.load_state_dict(compatible, strict=False)
+    print(
+        f"Loaded compatible checkpoint: {checkpoint_path} "
+        f"matched={len(compatible)} missing_after_partial={len(missing)} "
+        f"unexpected_after_partial={len(unexpected)} skipped_shape={len(skipped_shape)}"
+    )
+    for src_key, dst_key, src_shape, dst_shape in skipped_shape[:20]:
+        print(f"  skip shape {src_key} -> {dst_key}: {src_shape} != {dst_shape}")
+
+
 def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
     if "neck" not in model:
         raise ValueError("DGFE/API variant requires model.neck")
@@ -307,7 +354,8 @@ def dataset_cfg(dataset_out: Path, split: str, pipeline: list[dict[str, Any]]) -
 
 
 def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespace, dataset_out: Path) -> Any:
-    disable_pretrained(cfg.model)
+    if not args.keep_pretrained_init:
+        disable_pretrained(cfg.model)
     set_num_classes(cfg.model, 1)
     if variant == "dgfe_api":
         wrap_dgfe_api_neck(cfg.model, args)
@@ -365,6 +413,23 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
     return cfg
 
 
+def resolve_checkpoint_template(template: str, model_name: str, variant: str) -> Path:
+    return resolve_path(template.format(model=model_name, variant=variant))
+
+
+def compatible_checkpoint_for(model_name: str, variant: str, args: argparse.Namespace) -> Path | None:
+    if not args.load_compatible_from:
+        return None
+    path = resolve_checkpoint_template(args.load_compatible_from, model_name, variant)
+    if path.is_file():
+        return path
+    if "{variant}" in args.load_compatible_from and variant != "base":
+        base_path = resolve_checkpoint_template(args.load_compatible_from, model_name, "base")
+        if base_path.is_file():
+            return base_path
+    raise FileNotFoundError(f"Compatible checkpoint not found: {path}")
+
+
 def build_jobs(args: argparse.Namespace) -> list[tuple[str, str]]:
     available = dict(MODEL_CONFIGS)
     if args.include_mask_models:
@@ -395,7 +460,11 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
     cfg = Config.fromfile(str(mmdet_root() / MODEL_CONFIGS.get(model_name, MASK_MODEL_CONFIGS.get(model_name, ""))))
     cfg = patch_config(cfg, model_name, variant, args, dataset_out)
     print(f"RUN {model_name}/{variant} -> {cfg.work_dir}")
-    Runner.from_cfg(cfg).train()
+    runner = Runner.from_cfg(cfg)
+    checkpoint_path = compatible_checkpoint_for(model_name, variant, args)
+    if checkpoint_path is not None:
+        load_compatible_checkpoint(runner.model, checkpoint_path, variant)
+    runner.train()
 
 
 def parse_args() -> argparse.Namespace:
@@ -420,6 +489,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--weight-decay", type=float, default=0.0001)
     parser.add_argument("--amp", action="store_true")
+    parser.add_argument(
+        "--keep-pretrained-init",
+        action="store_true",
+        help="Keep init_cfg/pretrained entries from the original configs. May download weights if checkpoints are URLs.",
+    )
+    parser.add_argument(
+        "--load-compatible-from",
+        default="",
+        help=(
+            "Optional local checkpoint path/template loaded best-effort after model build. "
+            "Supports {model} and {variant}; e.g. checkpoints/{model}/base/latest.pth. "
+            "For dgfe_api, neck.* keys are also tried as neck.base_neck.*."
+        ),
+    )
     parser.add_argument("--img-scale", type=int, nargs=2, default=(640, 640))
     parser.add_argument("--val-interval", type=int, default=1)
     parser.add_argument("--checkpoint-interval", type=int, default=1)
