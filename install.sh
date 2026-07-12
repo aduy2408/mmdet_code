@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${VENV_DIR:-/marimo/mmdet-venv}"
 NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
 OPENCV_VERSION="${OPENCV_VERSION:-4.11.0.86}"
 CUDA_FLAVOR="${CUDA_FLAVOR:-cu121}"
 BUILD_ONLY="${BUILD_ONLY:-0}"
+MMCV_WHEEL_GLOB="${MMCV_WHEEL_GLOB:-$SCRIPT_DIR/mmcv-*.whl}"
 
 uv venv "$VENV_DIR" --python 3.11 --seed
 # shellcheck disable=SC1091
@@ -60,19 +62,11 @@ fi
 # ------------------------------------------------------------------
 # Install MMCV
 # ------------------------------------------------------------------
-if [ "$CUDA_FLAVOR" = "cu130" ]; then
-    if compgen -G "/marimo/wheelhouse/mmcv/mmcv-*.whl" > /dev/null; then
-        python -m pip install --force-reinstall /marimo/wheelhouse/mmcv/mmcv-*.whl
-    else
-        echo "Missing /marimo/wheelhouse/mmcv/mmcv-*.whl"
-        echo "Run ./build_mmdet_wheels.sh after this script to build MMCV for this GPU/PyTorch."
-        exit 1
-    fi
-else
-    python -m pip install \
-        mmcv==2.1.0 \
-        -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1/index.html
+if ! compgen -G "$MMCV_WHEEL_GLOB" > /dev/null; then
+    echo "Missing MMCV wheel: $MMCV_WHEEL_GLOB"
+    exit 1
 fi
+python -m pip install --force-reinstall $MMCV_WHEEL_GLOB
 
 python - <<'PY'
 import torch, mmcv
