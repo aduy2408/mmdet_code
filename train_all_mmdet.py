@@ -407,6 +407,17 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
         max_keep_ckpts=1,
         save_last=False,
     )
+    if args.early_stop_patience > 0:
+        cfg.custom_hooks = list(cfg.get("custom_hooks", []))
+        cfg.custom_hooks.append(
+            dict(
+                type="EarlyStoppingHook",
+                monitor="coco/bbox_mAP",
+                rule="greater",
+                patience=args.early_stop_patience,
+                min_delta=args.early_stop_min_delta,
+            )
+        )
     cfg.log_processor = dict(type="LogProcessor", window_size=1, by_epoch=True)
     cfg.randomness = dict(seed=args.seed)
     return cfg
@@ -529,6 +540,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-interval", type=int, default=50)
     parser.add_argument("--photometric", action="store_true", help="Add PhotoMetricDistortion to the train pipeline.")
     parser.add_argument("--score-thr", type=float, default=0.001, help="Detection score threshold used during validation/test.")
+    parser.add_argument("--early-stop-patience", type=int, default=0, help="Stop if coco/bbox_mAP does not improve for N validations; 0 disables it.")
+    parser.add_argument("--early-stop-min-delta", type=float, default=0.001, help="Minimum coco/bbox_mAP improvement for early stopping.")
     parser.add_argument("--api-weight", type=float, default=0.01)
     parser.add_argument("--api-rho", type=float, default=0.001)
     parser.add_argument("--api-target-mode", default="foreground")
