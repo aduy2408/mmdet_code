@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import random
 import shutil
@@ -11,6 +12,7 @@ import subprocess
 import sys
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,7 @@ SPLITS = ("train", "val", "test")
 GT_SOURCES = ("gt_one", "gt_filtered")
 CLASS_POLICIES = ("all", "only-class-1", "drop-class-3", "map-3-to-1")
 VARIANTS = ("base", "dgfe_api")
+AMP_DISABLED_MODELS = {"tood"}
 
 MODEL_CONFIGS = {
     "atss": "configs/atss/atss_r50_fpn_1x_coco.py",
@@ -379,7 +382,7 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
 
     patch_dataset_cfg(cfg.train_dataloader.dataset, dataset_out, "train")
     patch_dataset_cfg(cfg.val_dataloader.dataset, dataset_out, "val")
-    patch_dataset_cfg(cfg.test_dataloader.dataset, dataset_out, "val")
+    patch_dataset_cfg(cfg.test_dataloader.dataset, dataset_out, "test")
     if args.photometric:
         add_photometric_distortion(cfg.train_dataloader.dataset.pipeline)
     cfg.train_dataloader.batch_size = args.batch_size
@@ -390,7 +393,7 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
     cfg.test_dataloader.num_workers = args.num_workers
     cfg.test_dataloader.persistent_workers = args.num_workers > 0
     cfg.val_evaluator.ann_file = str(dataset_out / "annotations" / "val.json")
-    cfg.test_evaluator.ann_file = str(dataset_out / "annotations" / "val.json")
+    cfg.test_evaluator.ann_file = str(dataset_out / "annotations" / "test.json")
     cfg.train_cfg.max_epochs = args.epochs
     cfg.train_cfg.val_interval = args.val_interval
     if args.lr is not None:
@@ -401,11 +404,11 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
     cfg.work_dir = str(resolve_path(args.work_dir) / model_name / variant)
     cfg.default_hooks.logger.interval = args.log_interval
     cfg.default_hooks.checkpoint.update(
-        interval=-1,
+        interval=args.checkpoint_interval,
         save_best="coco/bbox_mAP",
         rule="greater",
         max_keep_ckpts=1,
-        save_last=False,
+        save_last=True,
     )
     if args.early_stop_patience > 0:
         cfg.custom_hooks = list(cfg.get("custom_hooks", []))
@@ -475,9 +478,87 @@ def build_jobs(args: argparse.Namespace) -> list[tuple[str, str]]:
     return [(model, variant) for model in sorted(models) for variant in variants]
 
 
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def find_trained_checkpoint(work_dir: Path) -> Path:
+    best_checkpoints = sorted(work_dir.glob("best_*.pth"))
+    if best_checkpoints:
+        return best_checkpoints[0]
+    latest = work_dir / "latest.pth"
+    if latest.is_file():
+        return latest
+    raise FileNotFoundError(f"No best_*.pth or latest.pth checkpoint found in {work_dir}")
+
+
+def run_final_test(config_path: Path, checkpoint_path: Path, work_dir: Path) -> Path:
+    result_dir = work_dir / "test_results"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        sys.executable,
+        str(mmdet_root() / "tools" / "test.py"),
+        str(config_path),
+        str(checkpoint_path),
+        "--work-dir",
+        str(result_dir),
+        "--out",
+        str(result_dir / "predictions.pkl"),
+    ]
+    print(f"TEST {checkpoint_path} -> {result_dir}")
+    subprocess.run(command, cwd=str(mmdet_root()), check=True)
+    return result_dir
+
+
+def write_job_summary(
+    model_name: str,
+    variant: str,
+    config_path: Path,
+    checkpoint_path: Path,
+    result_dir: Path,
+    work_dir: Path,
+    started_at: str,
+) -> Path:
+    summary_path = work_dir / "job_summary.json"
+    summary = {
+        "model": model_name,
+        "variant": variant,
+        "config_path": str(config_path),
+        "checkpoint_path": str(checkpoint_path),
+        "test_result_dir": str(result_dir),
+        "started_at": started_at,
+        "finished_at": utc_now(),
+    }
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    return summary_path
+
+
+def upload_job_to_hf(work_dir: Path, args: argparse.Namespace) -> None:
+    if args.no_hf_upload:
+        return
+    token = args.hf_token or os.environ.get("HF_TOKEN")
+    if not token:
+        raise ValueError("Hugging Face upload requires --hf-token or HF_TOKEN; pass --no-hf-upload to skip.")
+
+    try:
+        from huggingface_hub import HfApi
+    except ImportError as exc:
+        raise ImportError("Hugging Face upload requires `huggingface_hub`; install it or pass --no-hf-upload.") from exc
+
+    api = HfApi(token=token)
+    api.create_repo(repo_id=args.hf_repo_id, repo_type=args.hf_repo_type, private=False, exist_ok=True)
+    print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}")
+    api.upload_large_folder(
+        folder_path=str(work_dir),
+        repo_id=args.hf_repo_id,
+        repo_type=args.hf_repo_type,
+    )
+
+
 def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out: Path) -> None:
     if args.load_compatible_from:
         raise ValueError("--load-compatible-from is not supported when delegating to mmdetection/tools/train.py")
+    started_at = utc_now()
     config_path = write_patched_config(model_name, variant, args, dataset_out)
     work_dir = resolve_path(args.work_dir) / model_name / variant
     command = [
@@ -487,10 +568,16 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
         "--work-dir",
         str(work_dir),
     ]
-    if args.amp:
+    if args.amp and model_name not in AMP_DISABLED_MODELS:
         command.append("--amp")
+    elif args.amp:
+        print(f"AMP disabled for {model_name}: its loss path is unsafe with autocast.")
     print(f"RUN {model_name}/{variant} -> {work_dir}")
     subprocess.run(command, cwd=str(mmdet_root()), check=True)
+    checkpoint_path = find_trained_checkpoint(work_dir)
+    result_dir = run_final_test(config_path, checkpoint_path, work_dir)
+    write_job_summary(model_name, variant, config_path, checkpoint_path, result_dir, work_dir, started_at)
+    upload_job_to_hf(work_dir, args)
 
 
 def parse_args() -> argparse.Namespace:
@@ -547,6 +634,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-target-mode", default="foreground")
     parser.add_argument("--dgfe-levels", type=int, nargs="+", default=[0])
     parser.add_argument("--dgfe-upsample-steps", type=int, default=1)
+    parser.add_argument("--hf-repo-id", default="duyle2408/dgfe_review")
+    parser.add_argument("--hf-repo-type", default="dataset")
+    parser.add_argument("--hf-token", default="", help="Hugging Face token. Defaults to HF_TOKEN from the environment.")
+    parser.add_argument("--no-hf-upload", action="store_true", help="Skip uploading each completed job to Hugging Face.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
