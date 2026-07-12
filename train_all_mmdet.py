@@ -359,6 +359,17 @@ def add_photometric_distortion(train_pipeline: list[Any]) -> None:
     train_pipeline.insert(insert_at, dict(type="PhotoMetricDistortion"))
 
 
+def set_score_threshold(obj: Any, score_thr: float) -> None:
+    if isinstance(obj, dict):
+        if "score_thr" in obj:
+            obj["score_thr"] = score_thr
+        for value in obj.values():
+            set_score_threshold(value, score_thr)
+    elif isinstance(obj, list):
+        for value in obj:
+            set_score_threshold(value, score_thr)
+
+
 def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespace, dataset_out: Path) -> Any:
     if not args.keep_pretrained_init:
         disable_pretrained(cfg.model)
@@ -386,6 +397,7 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
         cfg.optim_wrapper.optimizer.lr = args.lr
     if args.weight_decay is not None:
         cfg.optim_wrapper.optimizer.weight_decay = args.weight_decay
+    set_score_threshold(cfg.model, args.score_thr)
     cfg.work_dir = str(resolve_path(args.work_dir) / model_name / variant)
     cfg.default_hooks.logger.interval = args.log_interval
     cfg.default_hooks.checkpoint.interval = args.checkpoint_interval
@@ -510,6 +522,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-interval", type=int, default=1)
     parser.add_argument("--log-interval", type=int, default=50)
     parser.add_argument("--photometric", action="store_true", help="Add PhotoMetricDistortion to the train pipeline.")
+    parser.add_argument("--score-thr", type=float, default=0.001, help="Detection score threshold used during validation/test.")
     parser.add_argument("--api-weight", type=float, default=0.01)
     parser.add_argument("--api-rho", type=float, default=0.001)
     parser.add_argument("--api-target-mode", default="foreground")
