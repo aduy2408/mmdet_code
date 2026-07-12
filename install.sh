@@ -5,7 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${VENV_DIR:-/marimo/mmdet-venv}"
 NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
 OPENCV_VERSION="${OPENCV_VERSION:-4.11.0.86}"
-CUDA_FLAVOR="${CUDA_FLAVOR:-cu121}"
 BUILD_ONLY="${BUILD_ONLY:-0}"
 MMCV_WHEEL_GLOB="${MMCV_WHEEL_GLOB:-$SCRIPT_DIR/mmcv-*.whl}"
 
@@ -16,15 +15,10 @@ source "$VENV_DIR/bin/activate"
 python -m pip install "setuptools==60.2.0"
 
 # ------------------------------------------------------------------
-# Install PyTorch
+# Install PyTorch (CUDA 13.0)
 # ------------------------------------------------------------------
-if [ "$CUDA_FLAVOR" = "cu130" ]; then
-    python -m pip install torch torchvision \
-        --index-url https://download.pytorch.org/whl/cu130
-else
-    python -m pip install torch==2.1.0 torchvision==0.16.0 \
-        --index-url https://download.pytorch.org/whl/cu121
-fi
+python -m pip install torch torchvision \
+    --index-url https://download.pytorch.org/whl/cu130
 
 python - <<'PY'
 import torch
@@ -70,8 +64,10 @@ python -m pip install --force-reinstall $MMCV_WHEEL_GLOB
 
 python - <<'PY'
 import torch, mmcv
+from mmcv.ops import roi_align
 print("torch:", torch.__version__, torch.version.cuda)
 print("mmcv :", mmcv.__version__)
+print("mmcv ops: ok", roi_align)
 PY
 
 # ------------------------------------------------------------------
@@ -97,6 +93,7 @@ import mmengine
 import mmdet
 import numpy as np
 import cv2
+from mmcv.ops import roi_align
 
 print("torch    :", torch.__version__, "CUDA", torch.version.cuda)
 print("mmcv     :", mmcv.__version__)
@@ -104,4 +101,5 @@ print("mmengine :", mmengine.__version__)
 print("mmdet    :", mmdet.__version__)
 print("numpy    :", np.__version__)
 print("opencv   :", cv2.__version__)
+print("mmcv ops :", roi_align)
 PY
