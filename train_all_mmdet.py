@@ -400,7 +400,13 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
     set_score_threshold(cfg.model, args.score_thr)
     cfg.work_dir = str(resolve_path(args.work_dir) / model_name / variant)
     cfg.default_hooks.logger.interval = args.log_interval
-    cfg.default_hooks.checkpoint.interval = args.checkpoint_interval
+    cfg.default_hooks.checkpoint.update(
+        interval=-1,
+        save_best="coco/bbox_mAP",
+        rule="greater",
+        max_keep_ckpts=1,
+        save_last=False,
+    )
     cfg.log_processor = dict(type="LogProcessor", window_size=1, by_epoch=True)
     cfg.randomness = dict(seed=args.seed)
     return cfg
