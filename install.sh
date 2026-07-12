@@ -4,6 +4,8 @@ set -euo pipefail
 VENV_DIR="${VENV_DIR:-/marimo/mmdet-venv}"
 NUMPY_VERSION="${NUMPY_VERSION:-1.26.4}"
 OPENCV_VERSION="${OPENCV_VERSION:-4.11.0.86}"
+CUDA_FLAVOR="${CUDA_FLAVOR:-cu121}"
+BUILD_ONLY="${BUILD_ONLY:-0}"
 
 uv venv "$VENV_DIR" --python 3.11 --seed
 # shellcheck disable=SC1091
@@ -12,10 +14,15 @@ source "$VENV_DIR/bin/activate"
 python -m pip install "setuptools==60.2.0"
 
 # ------------------------------------------------------------------
-# Install PyTorch (CUDA 12.1)
+# Install PyTorch
 # ------------------------------------------------------------------
-python -m pip install torch==2.1.0 torchvision==0.16.0 \
-    --index-url https://download.pytorch.org/whl/cu121
+if [ "$CUDA_FLAVOR" = "cu130" ]; then
+    python -m pip install torch torchvision \
+        --index-url https://download.pytorch.org/whl/cu130
+else
+    python -m pip install torch==2.1.0 torchvision==0.16.0 \
+        --index-url https://download.pytorch.org/whl/cu121
+fi
 
 python - <<'PY'
 import torch
@@ -45,12 +52,27 @@ echo "CUDA_HOME=$CUDA_HOME"
 which nvcc
 nvcc --version
 
+if [ "$BUILD_ONLY" = "1" ]; then
+    echo "Build-only env ready. Run ./build_mmdet_wheels.sh next."
+    exit 0
+fi
+
 # ------------------------------------------------------------------
 # Install MMCV
 # ------------------------------------------------------------------
-python -m pip install \
-    mmcv==2.1.0 \
-    -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1/index.html
+if [ "$CUDA_FLAVOR" = "cu130" ]; then
+    if compgen -G "/marimo/wheelhouse/mmcv/mmcv-*.whl" > /dev/null; then
+        python -m pip install --force-reinstall /marimo/wheelhouse/mmcv/mmcv-*.whl
+    else
+        echo "Missing /marimo/wheelhouse/mmcv/mmcv-*.whl"
+        echo "Run ./build_mmdet_wheels.sh after this script to build MMCV for this GPU/PyTorch."
+        exit 1
+    fi
+else
+    python -m pip install \
+        mmcv==2.1.0 \
+        -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.1/index.html
+fi
 
 python - <<'PY'
 import torch, mmcv
