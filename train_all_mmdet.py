@@ -7,6 +7,7 @@ import argparse
 import json
 import random
 import shutil
+import subprocess
 import sys
 from copy import deepcopy
 from dataclasses import dataclass
@@ -341,16 +342,21 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
     )
 
 
-def dataset_cfg(dataset_out: Path, split: str, pipeline: list[dict[str, Any]]) -> dict[str, Any]:
-    return dict(
-        type="CocoDataset",
-        data_root=str(dataset_out),
-        ann_file=f"annotations/{split}.json",
-        data_prefix=dict(img=f"images/{split}/"),
-        metainfo=dict(classes=("varroa",)),
-        filter_cfg=dict(filter_empty_gt=False, min_size=1),
-        pipeline=pipeline,
+def patch_dataset_cfg(dataset: Any, dataset_out: Path, split: str) -> None:
+    dataset.data_root = str(dataset_out)
+    dataset.ann_file = f"annotations/{split}.json"
+    dataset.data_prefix = dict(img=f"images/{split}/")
+    dataset.metainfo = dict(classes=("varroa",))
+
+
+def add_photometric_distortion(train_pipeline: list[Any]) -> None:
+    if any(step.get("type") == "PhotoMetricDistortion" for step in train_pipeline):
+        return
+    insert_at = next(
+        (idx for idx, step in enumerate(train_pipeline) if step.get("type") == "RandomFlip"),
+        len(train_pipeline) - 1,
     )
+    train_pipeline.insert(insert_at, dict(type="PhotoMetricDistortion"))
 
 
 def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespace, dataset_out: Path) -> Any:
@@ -360,57 +366,47 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
     if variant == "dgfe_api":
         wrap_dgfe_api_neck(cfg.model, args)
 
-    train_pipeline = [
-        dict(type="LoadImageFromFile"),
-        dict(type="LoadAnnotations", with_bbox=True),
-        dict(type="Resize", scale=tuple(args.img_scale), keep_ratio=True),
-        dict(type="PackDetInputs"),
-    ]
-    test_pipeline = [
-        dict(type="LoadImageFromFile"),
-        dict(type="Resize", scale=tuple(args.img_scale), keep_ratio=True),
-        dict(type="LoadAnnotations", with_bbox=True),
-        dict(type="PackDetInputs"),
-    ]
-
-    cfg.train_dataloader = dict(
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        persistent_workers=args.num_workers > 0,
-        sampler=dict(type="DefaultSampler", shuffle=True),
-        batch_sampler=None,
-        dataset=dataset_cfg(dataset_out, "train", train_pipeline),
-    )
-    cfg.val_dataloader = dict(
-        batch_size=1,
-        num_workers=args.num_workers,
-        persistent_workers=args.num_workers > 0,
-        drop_last=False,
-        sampler=dict(type="DefaultSampler", shuffle=False),
-        dataset=dataset_cfg(dataset_out, "val", test_pipeline),
-    )
-    cfg.test_dataloader = cfg.val_dataloader
-    cfg.val_evaluator = dict(
-        type="CocoMetric",
-        ann_file=str(dataset_out / "annotations" / "val.json"),
-        metric="bbox",
-    )
-    cfg.test_evaluator = cfg.val_evaluator
-    cfg.train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=args.epochs, val_interval=args.val_interval)
-    cfg.val_cfg = dict(type="ValLoop")
-    cfg.test_cfg = dict(type="TestLoop")
-    cfg.optim_wrapper = dict(
-        type="AmpOptimWrapper" if args.amp else "OptimWrapper",
-        optimizer=dict(type="SGD", lr=args.lr, momentum=0.9, weight_decay=args.weight_decay),
-    )
-    cfg.param_scheduler = []
-    cfg.auto_scale_lr = dict(enable=False)
+    patch_dataset_cfg(cfg.train_dataloader.dataset, dataset_out, "train")
+    patch_dataset_cfg(cfg.val_dataloader.dataset, dataset_out, "val")
+    patch_dataset_cfg(cfg.test_dataloader.dataset, dataset_out, "val")
+    if args.photometric:
+        add_photometric_distortion(cfg.train_dataloader.dataset.pipeline)
+    cfg.train_dataloader.batch_size = args.batch_size
+    cfg.train_dataloader.num_workers = args.num_workers
+    cfg.train_dataloader.persistent_workers = args.num_workers > 0
+    cfg.val_dataloader.num_workers = args.num_workers
+    cfg.val_dataloader.persistent_workers = args.num_workers > 0
+    cfg.test_dataloader.num_workers = args.num_workers
+    cfg.test_dataloader.persistent_workers = args.num_workers > 0
+    cfg.val_evaluator.ann_file = str(dataset_out / "annotations" / "val.json")
+    cfg.test_evaluator.ann_file = str(dataset_out / "annotations" / "val.json")
+    cfg.train_cfg.max_epochs = args.epochs
+    cfg.train_cfg.val_interval = args.val_interval
+    if args.lr is not None:
+        cfg.optim_wrapper.optimizer.lr = args.lr
+    if args.weight_decay is not None:
+        cfg.optim_wrapper.optimizer.weight_decay = args.weight_decay
     cfg.work_dir = str(resolve_path(args.work_dir) / model_name / variant)
     cfg.default_hooks.logger.interval = args.log_interval
-    cfg.default_hooks.checkpoint = dict(type="CheckpointHook", interval=args.checkpoint_interval)
+    cfg.default_hooks.checkpoint.interval = args.checkpoint_interval
     cfg.log_processor = dict(type="LogProcessor", window_size=1, by_epoch=True)
     cfg.randomness = dict(seed=args.seed)
     return cfg
+
+
+def write_patched_config(model_name: str, variant: str, args: argparse.Namespace, dataset_out: Path) -> Path:
+    ensure_mmdet_imports()
+    from mmengine.config import Config
+    from mmdet.utils import register_all_modules
+
+    register_all_modules()
+    config_path = mmdet_root() / MODEL_CONFIGS.get(model_name, MASK_MODEL_CONFIGS.get(model_name, ""))
+    cfg = Config.fromfile(str(config_path))
+    cfg = patch_config(cfg, model_name, variant, args, dataset_out)
+    out_path = Path(cfg.work_dir) / "patched_config.py"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cfg.dump(str(out_path))
+    return out_path
 
 
 def resolve_checkpoint_template(template: str, model_name: str, variant: str) -> Path:
@@ -451,20 +447,21 @@ def build_jobs(args: argparse.Namespace) -> list[tuple[str, str]]:
 
 
 def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out: Path) -> None:
-    ensure_mmdet_imports()
-    from mmengine.config import Config
-    from mmengine.runner import Runner
-    from mmdet.utils import register_all_modules
-
-    register_all_modules()
-    cfg = Config.fromfile(str(mmdet_root() / MODEL_CONFIGS.get(model_name, MASK_MODEL_CONFIGS.get(model_name, ""))))
-    cfg = patch_config(cfg, model_name, variant, args, dataset_out)
-    print(f"RUN {model_name}/{variant} -> {cfg.work_dir}")
-    runner = Runner.from_cfg(cfg)
-    checkpoint_path = compatible_checkpoint_for(model_name, variant, args)
-    if checkpoint_path is not None:
-        load_compatible_checkpoint(runner.model, checkpoint_path, variant)
-    runner.train()
+    if args.load_compatible_from:
+        raise ValueError("--load-compatible-from is not supported when delegating to mmdetection/tools/train.py")
+    config_path = write_patched_config(model_name, variant, args, dataset_out)
+    work_dir = resolve_path(args.work_dir) / model_name / variant
+    command = [
+        sys.executable,
+        str(mmdet_root() / "tools" / "train.py"),
+        str(config_path),
+        "--work-dir",
+        str(work_dir),
+    ]
+    if args.amp:
+        command.append("--amp")
+    print(f"RUN {model_name}/{variant} -> {work_dir}")
+    subprocess.run(command, cwd=str(mmdet_root()), check=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -486,8 +483,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--weight-decay", type=float, default=0.0001)
+    parser.add_argument("--lr", type=float, default=None, help="Override config optimizer lr; default keeps MMDetection config.")
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=None,
+        help="Override config optimizer weight decay; default keeps MMDetection config.",
+    )
     parser.add_argument("--amp", action="store_true")
     parser.add_argument(
         "--keep-pretrained-init",
@@ -507,6 +509,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-interval", type=int, default=1)
     parser.add_argument("--checkpoint-interval", type=int, default=1)
     parser.add_argument("--log-interval", type=int, default=50)
+    parser.add_argument("--photometric", action="store_true", help="Add PhotoMetricDistortion to the train pipeline.")
     parser.add_argument("--api-weight", type=float, default=0.01)
     parser.add_argument("--api-rho", type=float, default=0.001)
     parser.add_argument("--api-target-mode", default="foreground")
