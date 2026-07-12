@@ -634,7 +634,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-target-mode", default="foreground")
     parser.add_argument("--dgfe-levels", type=int, nargs="+", default=[0])
     parser.add_argument("--dgfe-upsample-steps", type=int, default=1)
-    parser.add_argument("--hf-repo-id", default="duyle2408/dgfe_review")
+    parser.add_argument("--hf-repo-id", default="duyle2408/varroa_mmdet_runs")
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument("--hf-token", default="", help="Hugging Face token. Defaults to HF_TOKEN from the environment.")
     parser.add_argument("--no-hf-upload", action="store_true", help="Skip uploading each completed job to Hugging Face.")
