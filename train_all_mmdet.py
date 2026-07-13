@@ -382,6 +382,18 @@ def set_score_threshold(obj: Any, score_thr: float) -> None:
             set_score_threshold(value, score_thr)
 
 
+def set_soft_nms(obj: Any, iou_thr: float, min_score: float) -> None:
+    if isinstance(obj, dict):
+        nms = obj.get("nms")
+        if isinstance(nms, dict) and nms.get("type") == "nms":
+            obj["nms"] = dict(type="soft_nms", iou_threshold=iou_thr, min_score=min_score)
+        for value in obj.values():
+            set_soft_nms(value, iou_thr, min_score)
+    elif isinstance(obj, list):
+        for value in obj:
+            set_soft_nms(value, iou_thr, min_score)
+
+
 def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespace, dataset_out: Path) -> Any:
     if not args.keep_pretrained_init:
         disable_pretrained(cfg.model)
@@ -415,6 +427,8 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
     if args.weight_decay is not None:
         cfg.optim_wrapper.optimizer.weight_decay = args.weight_decay
     set_score_threshold(cfg.model, args.score_thr)
+    if args.soft_nms:
+        set_soft_nms(cfg.model.test_cfg, args.soft_nms_iou_thr, args.soft_nms_min_score)
     cfg.work_dir = str(resolve_path(args.work_dir) / model_name / variant)
     cfg.default_hooks.logger.interval = args.log_interval
     cfg.default_hooks.checkpoint.update(
@@ -512,6 +526,15 @@ def find_trained_checkpoint(work_dir: Path) -> Path:
     raise FileNotFoundError(f"No best_*.pth or latest.pth checkpoint found in {work_dir}")
 
 
+def resolve_test_checkpoint(model_name: str, variant: str, args: argparse.Namespace, work_dir: Path) -> Path:
+    if not args.test_checkpoint:
+        return find_trained_checkpoint(work_dir)
+    checkpoint_path = resolve_checkpoint_template(args.test_checkpoint, model_name, variant)
+    if checkpoint_path.is_file():
+        return checkpoint_path
+    raise FileNotFoundError(f"Test checkpoint not found: {checkpoint_path}")
+
+
 def run_final_test(config_path: Path, checkpoint_path: Path, work_dir: Path) -> Path:
     result_dir = work_dir / "test_results"
     result_dir.mkdir(parents=True, exist_ok=True)
@@ -582,12 +605,12 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
     started_at = utc_now()
     work_dir = resolve_path(args.work_dir) / model_name / variant
     existing_config_path = work_dir / "patched_config.py"
-    if args.test_only and existing_config_path.is_file():
+    if args.test_only and existing_config_path.is_file() and not args.soft_nms:
         config_path = existing_config_path
     else:
         config_path = write_patched_config(model_name, variant, args, dataset_out)
     if args.test_only:
-        checkpoint_path = find_trained_checkpoint(work_dir)
+        checkpoint_path = resolve_test_checkpoint(model_name, variant, args, work_dir)
         result_dir = run_final_test(config_path, checkpoint_path, work_dir)
         write_job_summary(model_name, variant, config_path, checkpoint_path, result_dir, work_dir, started_at)
         upload_work_dir_to_hf(args)
@@ -658,6 +681,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-interval", type=int, default=50)
     parser.add_argument("--photometric", action="store_true", help="Add PhotoMetricDistortion to the train pipeline.")
     parser.add_argument("--score-thr", type=float, default=0.001, help="Detection score threshold used during validation/test.")
+    parser.add_argument("--soft-nms", action="store_true", help="Use Soft-NMS in validation/test NMS configs.")
+    parser.add_argument("--soft-nms-iou-thr", type=float, default=0.5, help="Soft-NMS IoU threshold.")
+    parser.add_argument("--soft-nms-min-score", type=float, default=0.05, help="Soft-NMS minimum score.")
     parser.add_argument("--early-stop-patience", type=int, default=0, help="Stop if coco/bbox_mAP does not improve for N validations; 0 disables it.")
     parser.add_argument("--early-stop-min-delta", type=float, default=0.001, help="Minimum coco/bbox_mAP improvement for early stopping.")
     parser.add_argument("--api-weight", type=float, default=0.01)
@@ -670,6 +696,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hf-token", default="", help="Hugging Face token. Defaults to HF_TOKEN from the environment.")
     parser.add_argument("--no-hf-upload", action="store_true", help="Skip uploading each completed job to Hugging Face.")
     parser.add_argument("--test-only", action="store_true", help="Skip training and run final test/upload for existing job work dirs.")
+    parser.add_argument(
+        "--test-checkpoint",
+        default="",
+        help="Optional checkpoint path/template for --test-only. Supports {model} and {variant}.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
