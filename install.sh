@@ -80,6 +80,7 @@ python -m pip install \
 # ------------------------------------------------------------------
 # Pin NumPy + OpenCV
 # ------------------------------------------------------------------
+python -m pip install huggingface_hub
 python -m pip install --force-reinstall "numpy==${NUMPY_VERSION}"
 python -m pip install --force-reinstall --no-deps "opencv-python==${OPENCV_VERSION}"
 

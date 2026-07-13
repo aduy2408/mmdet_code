@@ -278,7 +278,10 @@ def disable_pretrained(obj: Any) -> None:
 def checkpoint_state_dict(checkpoint_path: Path) -> dict[str, Any]:
     import torch
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    except TypeError:
+        checkpoint = torch.load(checkpoint_path, map_location="cpu")
     if isinstance(checkpoint, dict):
         for key in ("state_dict", "model", "ema"):
             value = checkpoint.get(key)
@@ -482,6 +485,12 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def run_trusted_checkpoint_command(command: list[str], *, cwd: Path) -> None:
+    env = os.environ.copy()
+    env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    subprocess.run(command, cwd=str(cwd), env=env, check=True)
+
+
 def find_trained_checkpoint(work_dir: Path) -> Path:
     best_checkpoints = sorted(work_dir.glob("best_*.pth"))
     if best_checkpoints:
@@ -506,7 +515,7 @@ def run_final_test(config_path: Path, checkpoint_path: Path, work_dir: Path) -> 
         str(result_dir / "predictions.pkl"),
     ]
     print(f"TEST {checkpoint_path} -> {result_dir}")
-    subprocess.run(command, cwd=str(mmdet_root()), check=True)
+    run_trusted_checkpoint_command(command, cwd=mmdet_root())
     return result_dir
 
 
@@ -559,8 +568,18 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
     if args.load_compatible_from:
         raise ValueError("--load-compatible-from is not supported when delegating to mmdetection/tools/train.py")
     started_at = utc_now()
-    config_path = write_patched_config(model_name, variant, args, dataset_out)
     work_dir = resolve_path(args.work_dir) / model_name / variant
+    existing_config_path = work_dir / "patched_config.py"
+    if args.test_only and existing_config_path.is_file():
+        config_path = existing_config_path
+    else:
+        config_path = write_patched_config(model_name, variant, args, dataset_out)
+    if args.test_only:
+        checkpoint_path = find_trained_checkpoint(work_dir)
+        result_dir = run_final_test(config_path, checkpoint_path, work_dir)
+        write_job_summary(model_name, variant, config_path, checkpoint_path, result_dir, work_dir, started_at)
+        upload_job_to_hf(work_dir, args)
+        return
     command = [
         sys.executable,
         str(mmdet_root() / "tools" / "train.py"),
@@ -573,7 +592,7 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
     elif args.amp:
         print(f"AMP disabled for {model_name}: its loss path is unsafe with autocast.")
     print(f"RUN {model_name}/{variant} -> {work_dir}")
-    subprocess.run(command, cwd=str(mmdet_root()), check=True)
+    run_trusted_checkpoint_command(command, cwd=mmdet_root())
     checkpoint_path = find_trained_checkpoint(work_dir)
     result_dir = run_final_test(config_path, checkpoint_path, work_dir)
     write_job_summary(model_name, variant, config_path, checkpoint_path, result_dir, work_dir, started_at)
@@ -638,6 +657,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument("--hf-token", default="", help="Hugging Face token. Defaults to HF_TOKEN from the environment.")
     parser.add_argument("--no-hf-upload", action="store_true", help="Skip uploading each completed job to Hugging Face.")
+    parser.add_argument("--test-only", action="store_true", help="Skip training and run final test/upload for existing job work dirs.")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
