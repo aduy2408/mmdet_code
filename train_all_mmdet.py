@@ -27,7 +27,7 @@ AMP_DISABLED_MODELS = {"tood"}
 
 MODEL_CONFIGS = {
     "atss": "configs/atss/atss_r50_fpn_1x_coco.py",
-    "retinanet": "configs/retinanet/retinanet_r18_fpn_1x_coco.py",
+    "retinanet": "configs/retinanet/retinanet_r50_fpn_1x_coco.py",
     "faster_rcnn": "configs/faster_rcnn/faster-rcnn_r50_fpn_1x_coco.py",
     "cascade_rcnn": "configs/cascade_rcnn/cascade-rcnn_r50_fpn_1x_coco.py",
     "dyhead": "configs/dyhead/atss_r50_fpn_dyhead_1x_coco.py",
@@ -365,6 +365,12 @@ def add_photometric_distortion(train_pipeline: list[Any]) -> None:
     train_pipeline.insert(insert_at, dict(type="PhotoMetricDistortion"))
 
 
+def set_resize_scale(pipeline: list[Any], scale: tuple[int, int]) -> None:
+    for step in pipeline:
+        if step.get("type") == "Resize":
+            step["scale"] = scale
+
+
 def set_score_threshold(obj: Any, score_thr: float) -> None:
     if isinstance(obj, dict):
         if "score_thr" in obj:
@@ -383,9 +389,14 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
     if variant == "dgfe_api":
         wrap_dgfe_api_neck(cfg.model, args)
 
+    cfg.val_dataloader = deepcopy(cfg.val_dataloader)
+    cfg.test_dataloader = deepcopy(cfg.test_dataloader)
     patch_dataset_cfg(cfg.train_dataloader.dataset, dataset_out, "train")
     patch_dataset_cfg(cfg.val_dataloader.dataset, dataset_out, "val")
     patch_dataset_cfg(cfg.test_dataloader.dataset, dataset_out, "test")
+    set_resize_scale(cfg.train_dataloader.dataset.pipeline, tuple(args.img_scale))
+    set_resize_scale(cfg.val_dataloader.dataset.pipeline, tuple(args.img_scale))
+    set_resize_scale(cfg.test_dataloader.dataset.pipeline, tuple(args.img_scale))
     if args.photometric:
         add_photometric_distortion(cfg.train_dataloader.dataset.pipeline)
     cfg.train_dataloader.batch_size = args.batch_size
@@ -542,7 +553,7 @@ def write_job_summary(
     return summary_path
 
 
-def upload_job_to_hf(work_dir: Path, args: argparse.Namespace) -> None:
+def upload_work_dir_to_hf(args: argparse.Namespace) -> None:
     if args.no_hf_upload:
         return
     token = args.hf_token or os.environ.get("HF_TOKEN")
@@ -556,6 +567,7 @@ def upload_job_to_hf(work_dir: Path, args: argparse.Namespace) -> None:
 
     api = HfApi(token=token)
     api.create_repo(repo_id=args.hf_repo_id, repo_type=args.hf_repo_type, private=False, exist_ok=True)
+    work_dir = resolve_path(args.work_dir)
     print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}")
     api.upload_large_folder(
         folder_path=str(work_dir),
@@ -578,7 +590,7 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
         checkpoint_path = find_trained_checkpoint(work_dir)
         result_dir = run_final_test(config_path, checkpoint_path, work_dir)
         write_job_summary(model_name, variant, config_path, checkpoint_path, result_dir, work_dir, started_at)
-        upload_job_to_hf(work_dir, args)
+        upload_work_dir_to_hf(args)
         return
     command = [
         sys.executable,
@@ -596,7 +608,7 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
     checkpoint_path = find_trained_checkpoint(work_dir)
     result_dir = run_final_test(config_path, checkpoint_path, work_dir)
     write_job_summary(model_name, variant, config_path, checkpoint_path, result_dir, work_dir, started_at)
-    upload_job_to_hf(work_dir, args)
+    upload_work_dir_to_hf(args)
 
 
 def parse_args() -> argparse.Namespace:
