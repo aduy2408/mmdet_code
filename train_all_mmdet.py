@@ -567,7 +567,7 @@ def upload_work_dir_to_hf(args: argparse.Namespace) -> None:
 
     api = HfApi(token=token)
     api.create_repo(repo_id=args.hf_repo_id, repo_type=args.hf_repo_type, private=False, exist_ok=True)
-    work_dir = resolve_path(args.work_dir)
+    work_dir = resolve_path(args.work_dir).parent
     print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}")
     api.upload_large_folder(
         folder_path=str(work_dir),

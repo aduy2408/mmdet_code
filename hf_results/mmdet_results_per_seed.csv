@@ -1,0 +1,10 @@
+seed,model,variant,status,coco/bbox_mAP,coco/bbox_mAP_50,coco/bbox_mAP_75,coco/bbox_mAP_s,coco/bbox_mAP_m,coco/bbox_mAP_l,repo,source,timestamp
+42,cascade_rcnn,base,ok,0.341,0.906,0.13,0.339,0.35,-1.0,duyle2408/varroa_mmdet_runs,hf_results/downloads/duyle2408__varroa_mmdet_runs/cascade_rcnn/base,2026-07-13T03:51:00.384440+00:00
+42,faster_rcnn,base,ok,0.343,0.895,0.109,0.349,0.34,-1.0,duyle2408/varroa_mmdet_runs,hf_results/downloads/duyle2408__varroa_mmdet_runs/faster_rcnn/base,2026-07-13T00:52:46.879555+00:00
+42,fcos,base,ok,0.171,0.576,0.03,0.251,0.168,-1.0,duyle2408/varroa_mmdet_runs,hf_results/downloads/duyle2408__varroa_mmdet_runs/fcos/base,2026-07-13T01:42:33.831995+00:00
+43,cascade_rcnn,base,ok,0.341,0.906,0.13,0.339,0.35,-1.0,duyle2408/varroa_mmdet_runs_seed43,hf_results/downloads/duyle2408__varroa_mmdet_runs_seed43/varroa_4models_seed43/cascade_rcnn/base,2026-07-13T03:51:00.384440+00:00
+43,faster_rcnn,base,ok,0.345,0.913,0.13,0.34,0.359,-1.0,duyle2408/varroa_mmdet_runs_seed43,hf_results/downloads/duyle2408__varroa_mmdet_runs_seed43/varroa_4models_seed43/faster_rcnn/base,2026-07-13T04:26:55.259821+00:00
+43,fcos,base,ok,0.31,0.896,0.092,0.291,0.346,-1.0,duyle2408/varroa_mmdet_runs_seed43,hf_results/downloads/duyle2408__varroa_mmdet_runs_seed43/varroa_4models_seed43/fcos/base,2026-07-13T04:36:55.903950+00:00
+44,cascade_rcnn,base,ok,0.32,0.888,0.103,0.324,0.322,-1.0,duyle2408/varroa_mmdet_runs_seed43,hf_results/downloads/duyle2408__varroa_mmdet_runs_seed43/cascade_rcnn/base,2026-07-13T05:36:50.018928+00:00
+44,faster_rcnn,base,ok,0.327,0.882,0.108,0.311,0.35,-1.0,duyle2408/varroa_mmdet_runs_seed43,hf_results/downloads/duyle2408__varroa_mmdet_runs_seed43/faster_rcnn/base,2026-07-13T05:53:00.094711+00:00
+44,fcos,base,ok,0.285,0.86,0.085,0.262,0.319,-1.0,duyle2408/varroa_mmdet_runs_seed43,hf_results/downloads/duyle2408__varroa_mmdet_runs_seed43/fcos/base,2026-07-13T06:03:52.607386+00:00
