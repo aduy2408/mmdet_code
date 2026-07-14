@@ -338,7 +338,16 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
         base_neck=base_neck,
         out_channels=out_channels,
         levels=tuple(args.dgfe_levels),
-        dgfe=dict(type="FeatureDGFE", upsample_steps=args.dgfe_upsample_steps),
+        dgfe=dict(
+            type="FeatureDGFE",
+            reduction=args.dgfe_reduction,
+            threshold_init=args.dgfe_threshold,
+            sharpness=args.dgfe_sharpness,
+            alpha_init=args.dgfe_alpha_init,
+            alpha_max=args.dgfe_alpha_max,
+            recon_ratio=args.dgfe_recon_ratio,
+            upsample_steps=args.dgfe_upsample_steps,
+        ),
         api=dict(
             type="AdversarialPerturbationInjection",
             api_weight=args.api_weight,
@@ -690,6 +699,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-rho", type=float, default=0.001)
     parser.add_argument("--api-target-mode", default="foreground")
     parser.add_argument("--dgfe-levels", type=int, nargs="+", default=[0])
+    parser.add_argument("--dgfe-reduction", type=int, default=8)
+    parser.add_argument("--dgfe-threshold", type=float, default=0.0156862)
+    parser.add_argument("--dgfe-sharpness", type=float, default=10.0)
+    parser.add_argument("--dgfe-alpha-init", type=float, default=1e-3)
+    parser.add_argument("--dgfe-alpha-max", type=float, default=1.0)
+    parser.add_argument("--dgfe-recon-ratio", type=float, default=0.5)
     parser.add_argument("--dgfe-upsample-steps", type=int, default=1)
     parser.add_argument("--hf-repo-id", default="duyle2408/varroa_mmdet_runs")
     parser.add_argument("--hf-repo-type", default="dataset")

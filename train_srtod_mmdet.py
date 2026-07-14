@@ -26,7 +26,7 @@ CLASS_POLICIES = ("all", "only-class-1", "drop-class-3", "map-3-to-1")
 MODEL_CONFIGS = {
     "srtod_faster": "srtod_project/srtod_faster_rcnn/config/srtod-faster-rcnn_r50_fpn_1x_coco.py",
     "srtod_cascade": "srtod_project/srtod_detectors/config/srtod-cascade-rcnn_r50-rfp_1x_coco.py",
-    "fcos": "build/lib/mmdet/.mim/configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py",
+    "fcos": "configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py",
 }
 
 
@@ -391,11 +391,97 @@ def patch_config(cfg: Any, model_name: str, args: argparse.Namespace, dataset_ou
     return cfg
 
 
+def config_path_for(model_name: str, args: argparse.Namespace) -> Path:
+    config_path = srtod_root() / MODEL_CONFIGS[model_name]
+    if model_name != "fcos":
+        return config_path
+
+    temp_dir = resolve_path(args.work_dir) / "_generated_configs"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    base_path = temp_dir / "coco_detection_base.py"
+    base_path.write_text(
+        """# Generated non-lazy COCO base for SR-TOD FCOS.
+dataset_type = 'CocoDataset'
+data_root = 'data/coco/'
+backend_args = None
+
+train_pipeline = [
+    dict(type='LoadImageFromFile', backend_args=backend_args),
+    dict(type='LoadAnnotations', with_bbox=True),
+    dict(type='Resize', scale=(1333, 800), keep_ratio=True),
+    dict(type='RandomFlip', prob=0.5),
+    dict(type='PackDetInputs'),
+]
+test_pipeline = [
+    dict(type='LoadImageFromFile', backend_args=backend_args),
+    dict(type='Resize', scale=(1333, 800), keep_ratio=True),
+    dict(type='LoadAnnotations', with_bbox=True),
+    dict(
+        type='PackDetInputs',
+        meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape', 'scale_factor')),
+]
+train_dataloader = dict(
+    batch_size=2,
+    num_workers=2,
+    persistent_workers=True,
+    sampler=dict(type='DefaultSampler', shuffle=True),
+    batch_sampler=dict(type='AspectRatioBatchSampler'),
+    dataset=dict(
+        type=dataset_type,
+        data_root=data_root,
+        ann_file='annotations/instances_train2017.json',
+        data_prefix=dict(img='train2017/'),
+        filter_cfg=dict(filter_empty_gt=True, min_size=32),
+        pipeline=train_pipeline,
+        backend_args=backend_args))
+val_dataloader = dict(
+    batch_size=1,
+    num_workers=2,
+    persistent_workers=True,
+    drop_last=False,
+    sampler=dict(type='DefaultSampler', shuffle=False),
+    dataset=dict(
+        type=dataset_type,
+        data_root=data_root,
+        ann_file='annotations/instances_val2017.json',
+        data_prefix=dict(img='val2017/'),
+        test_mode=True,
+        pipeline=test_pipeline,
+        backend_args=backend_args))
+test_dataloader = val_dataloader
+val_evaluator = dict(
+    type='CocoMetric',
+    ann_file=data_root + 'annotations/instances_val2017.json',
+    metric='bbox',
+    format_only=False,
+    backend_args=backend_args)
+test_evaluator = val_evaluator
+""",
+        encoding="utf-8",
+    )
+    text = config_path.read_text(encoding="utf-8")
+    text = text.replace(
+        "'../_base_/datasets/coco_detection.py'",
+        repr(str(base_path)),
+    )
+    text = text.replace(
+        "'../_base_/schedules/schedule_1x.py'",
+        repr(str(srtod_root() / "configs" / "_base_" / "schedules" / "schedule_1x.py")),
+    )
+    text = text.replace(
+        "'../_base_/default_runtime.py'",
+        repr(str(srtod_root() / "configs" / "_base_" / "default_runtime.py")),
+    )
+    temp_path = temp_dir / "fcos_r50-caffe_fpn_gn-head_1x_coco.py"
+    temp_path.write_text(text, encoding="utf-8")
+    return temp_path
+
+
 def write_patched_config(model_name: str, args: argparse.Namespace, dataset_out: Path) -> Path:
     ensure_srtod_imports()
     from mmengine.config import Config
 
-    config_path = srtod_root() / MODEL_CONFIGS[model_name]
+    config_path = config_path_for(model_name, args)
     cfg = Config.fromfile(str(config_path), import_custom_modules=False)
     cfg = patch_config(cfg, model_name, args, dataset_out)
     out_path = Path(cfg.work_dir) / "patched_config.py"

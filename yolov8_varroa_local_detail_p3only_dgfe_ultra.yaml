@@ -1,0 +1,43 @@
+# YOLOv8 Varroa P3-only LocalDetail with ultra-strong DGFE and boxgrad API.
+# Higher spatial pressure and harder background suppression than dgfe_stronger.
+
+nc: 1
+dgfe_rec_gain: 0.04
+dgfe_spatial_gain: 0.45
+dgfe_boundary_ring: 1.75
+dgfe_inner_value: 0.15
+dgfe_tiny_area: 64.0
+dgfe_neg_pos_ratio: 5
+dgfe_neg_gain: 0.50
+scales:
+  n: [0.33, 0.25, 1024]
+  s: [0.33, 0.50, 1024]
+  m: [0.67, 0.75, 768]
+  l: [1.00, 1.00, 512]
+  x: [1.00, 1.25, 512]
+
+backbone:
+  - [-1, 1, Conv, [64, 3, 2]]       # 0-P1/2
+  - [-1, 1, Conv, [128, 3, 2]]      # 1-P2/4
+  - [-1, 3, LocalDetailRepC2f, [128, True]] # 2-P2/4
+  - [-1, 1, Conv, [256, 3, 2]]      # 3-P3/8
+  - [-1, 6, LocalDetailRepC2f, [256, True]] # 4-P3/8
+  - [-1, 1, Conv, [512, 3, 2]]      # 5-P4/16
+  - [-1, 6, RepC2f, [512, True]]    # 6-P4/16
+  - [-1, 1, Conv, [1024, 3, 2]]     # 7-P5/32
+  - [-1, 3, RepC2f, [1024, True]]   # 8-P5/32
+  - [-1, 1, SPPF, [1024, 5]]        # 9-P5/32
+
+head:
+  - [-1, 1, nn.Upsample, [None, 2, nearest]]
+  - [[-1, 6], 1, Concat, [1]]
+  - [-1, 3, RepC2f, [512]]          # 12-P4/16
+
+  - [-1, 1, nn.Upsample, [None, 2, nearest]]
+  - [[-1, 4], 1, Concat, [1]]
+  - [-1, 3, LocalDetailRepC2f, [256]] # 15-P3/8
+
+  - [15, 1, FeatureDGFE, [8, 0.010, 14.0, 0.003, 1.3, 0.6, 3]] # 16-P3 ultra SR-DGFE
+  - [-1, 1, AdversarialPerturbationInjection, [0.005, 0.05, boxgrad]] # 17-P3 localization API
+
+  - [[17], 1, Detect, [nc]]

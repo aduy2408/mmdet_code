@@ -6,6 +6,8 @@ from .ct_resnet_neck import CTResNetNeck
 from .dilated_encoder import DilatedEncoder
 from .dyhead import DyHead
 from .fpg import FPG
+from .feature_augment_neck import (AdversarialPerturbationInjection,
+                                   FeatureAugmentNeck, FeatureDGFE)
 from .fpn import FPN
 from .fpn_carafe import FPN_CARAFE
 from .hrfpn import HRFPN
@@ -22,5 +24,7 @@ from .yolox_pafpn import YOLOXPAFPN
 __all__ = [
     'FPN', 'BFP', 'ChannelMapper', 'HRFPN', 'NASFPN', 'FPN_CARAFE', 'PAFPN',
     'NASFCOS_FPN', 'RFP', 'YOLOV3Neck', 'FPG', 'DilatedEncoder',
-    'CTResNetNeck', 'SSDNeck', 'YOLOXPAFPN', 'DyHead', 'CSPNeXtPAFPN', 'SSH'
+    'CTResNetNeck', 'SSDNeck', 'YOLOXPAFPN', 'DyHead', 'CSPNeXtPAFPN',
+    'SSH', 'FeatureAugmentNeck', 'FeatureDGFE',
+    'AdversarialPerturbationInjection'
 ]
