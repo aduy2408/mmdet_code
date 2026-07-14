@@ -56,25 +56,26 @@ def build_quality_spatial_target(detector, logits: Tensor, batch_inputs: Tensor,
     inner_value = max(
         min(float(getattr(detector.neck, 'dgfe_inner_value', 0.3)), 1.0), 0.0)
     tiny_area = float(getattr(detector.neck, 'dgfe_tiny_area', 4.0))
-    edge_norm = max(float(getattr(detector.neck, 'dgfe_edge_error_norm',
-                                  0.25)), 1e-9)
-
-    by_gt: dict[tuple[int, int], list[float]] = {}
+    by_gt: dict[tuple[int, int], list[dict]] = {}
     for record in records:
         batch_idx = int(record['batch_idx'])
         gt_idx = int(record['gt_idx'])
-        quality = float(record.get('quality', 0.0))
-        by_gt.setdefault((batch_idx, gt_idx), []).append(quality)
+        by_gt.setdefault((batch_idx, gt_idx), []).append(record)
 
-    for (batch_idx, gt_idx), qualities in by_gt.items():
+    def write_max(region: Tensor, value: float) -> None:
+        if region.numel():
+            region.copy_(torch.maximum(
+                region, torch.full_like(region, value)))
+
+    for (batch_idx, gt_idx), gt_records in by_gt.items():
         if batch_idx >= len(batch_data_samples):
             continue
         bboxes = batch_data_samples[batch_idx].gt_instances.bboxes
         bboxes = bboxes.tensor if hasattr(bboxes, 'tensor') else bboxes
         if gt_idx >= bboxes.shape[0]:
             continue
-        quality = max(0.0, min(1.0, max(qualities)))
-        edge_value = max(0.0, min(1.0, 1.0 - quality / edge_norm))
+        best = max(gt_records, key=lambda item: float(item.get('quality', 0)))
+        quality = max(0.0, min(1.0, float(best.get('quality', 0.0))))
         x1, y1, x2, y2 = [float(v) for v in bboxes[gt_idx]]
         fx1, fx2 = x1 * feat_w / img_w, x2 * feat_w / img_w
         fy1, fy2 = y1 * feat_h / img_h, y2 * feat_h / img_h
@@ -83,19 +84,29 @@ def build_quality_spatial_target(detector, logits: Tensor, batch_inputs: Tensor,
         ix1, ix2 = slice_from_box(fx1, fx2, feat_w)
         iy1, iy2 = slice_from_box(fy1, fy2, feat_h)
         if (ix2 - ix1) * (iy2 - iy1) <= tiny_area:
-            region = target[batch_idx, :, iy1:iy2, ix1:ix2]
-            region.copy_(torch.maximum(region, torch.full_like(region, edge_value)))
+            write_max(target[batch_idx, :, iy1:iy2, ix1:ix2],
+                      quality)
             continue
-        region = target[batch_idx, :, iy1:iy2, ix1:ix2]
-        region.copy_(torch.maximum(region, torch.full_like(region, inner_value)))
+        write_max(target[batch_idx, :, iy1:iy2, ix1:ix2],
+                  inner_value * quality)
         edge = max(int(math.ceil(ring)), 1)
-        regions = (
-            target[batch_idx, :, iy1:min(iy1 + edge, iy2), ix1:ix2],
-            target[batch_idx, :, max(iy2 - edge, iy1):iy2, ix1:ix2],
-            target[batch_idx, :, iy1:iy2, ix1:min(ix1 + edge, ix2)],
-            target[batch_idx, :, iy1:iy2, max(ix2 - edge, ix1):ix2],
+        edge_regions = (
+            (target[batch_idx, :, iy1:min(iy1 + edge, iy2), ix1:ix2],
+             quality),
+            (target[batch_idx, :, max(iy2 - edge, iy1):iy2, ix1:ix2],
+             quality),
+            (target[batch_idx, :, iy1:iy2, ix1:min(ix1 + edge, ix2)],
+             quality),
+            (target[batch_idx, :, iy1:iy2, max(ix2 - edge, ix1):ix2],
+             quality),
         )
-        for region in regions:
-            if region.numel():
-                region.copy_(torch.maximum(region, torch.full_like(region, edge_value)))
+        for region, value in edge_regions:
+            write_max(region, value)
+
+        ox1, ox2 = slice_from_box(fx1 - ring, fx2 + ring, feat_w)
+        oy1, oy2 = slice_from_box(fy1 - ring, fy2 + ring, feat_h)
+        write_max(target[batch_idx, :, oy1:iy1, ox1:ox2], quality)
+        write_max(target[batch_idx, :, iy2:oy2, ox1:ox2], quality)
+        write_max(target[batch_idx, :, iy1:iy2, ox1:ix1], quality)
+        write_max(target[batch_idx, :, iy1:iy2, ix2:ox2], quality)
     return target

@@ -86,10 +86,7 @@ class FeatureDGFE(BaseModule):
                 mode='bilinear',
                 align_corners=False)
 
-        img = batch_inputs
-        img_min = img.amin(dim=(2, 3), keepdim=True)
-        img_max = img.amax(dim=(2, 3), keepdim=True)
-        img = (img - img_min) / (img_max - img_min).clamp(min=1e-6)
+        img = batch_inputs.clamp(0, 1)
 
         diff = (recon - img).abs().mean(dim=1, keepdim=True)
         logits_img = self.sharpness * (
@@ -104,7 +101,8 @@ class FeatureDGFE(BaseModule):
         channel_gate = torch.sigmoid(avg_gate + max_gate)
         alpha = self.alpha.to(device=x.device, dtype=x.dtype)
         out = x * (1.0 + alpha * (channel_gate * spatial_gate - 1.0))
-        self.last_aux = dict(recon=recon, spatial_logits=logits,
+        self.last_aux = dict(recon=recon, image_target=img,
+                             spatial_logits=logits,
                              spatial_gate=spatial_gate,
                              alpha=alpha.reshape(1)) if self.training else None
         return out
@@ -280,8 +278,8 @@ class FeatureAugmentNeck(BaseModule):
                  dgfe_tiny_area: float = 4.0,
                  dgfe_neg_pos_ratio: int = 3,
                  dgfe_neg_gain: float = 0.25,
-                 dgfe_spatial_target_mode: str = 'iou',
-                 dgfe_edge_error_norm: float = 0.25,
+                 input_mean: Sequence[float] = (0.0, 0.0, 0.0),
+                 input_std: Sequence[float] = (1.0, 1.0, 1.0),
         init_cfg: OptConfigType = None) -> None:
         super().__init__(init_cfg=init_cfg)
         self.base_neck = self._build_base_neck(base_neck)
@@ -297,8 +295,12 @@ class FeatureAugmentNeck(BaseModule):
         self.dgfe_tiny_area = float(dgfe_tiny_area)
         self.dgfe_neg_pos_ratio = int(dgfe_neg_pos_ratio)
         self.dgfe_neg_gain = float(dgfe_neg_gain)
-        self.dgfe_spatial_target_mode = str(dgfe_spatial_target_mode).lower()
-        self.dgfe_edge_error_norm = max(float(dgfe_edge_error_norm), 1e-9)
+        self.register_buffer(
+            '_input_mean', torch.tensor(input_mean).view(1, -1, 1, 1),
+            persistent=False)
+        self.register_buffer(
+            '_input_std', torch.tensor(input_std).view(1, -1, 1, 1),
+            persistent=False)
         self.dgfe_epoch = 0
         self._last_dgfe_aux: list[dict[str, Tensor]] = []
         self._api_clean_features: tuple[Tensor, ...] | None = None
@@ -306,19 +308,24 @@ class FeatureAugmentNeck(BaseModule):
         self.dgfe_modules = nn.ModuleDict()
         self.api_modules_by_level = nn.ModuleDict()
 
-        for level in self.levels:
-            level_channels = (
-                channels[level] if isinstance(channels, list) else channels)
-            if dgfe is not None:
-                cfg = dict(dgfe)
-                cfg.setdefault('type', 'FeatureDGFE')
-                cfg.setdefault('channels', level_channels)
-                self.dgfe_modules[str(level)] = MODELS.build(cfg)
-            if api is not None:
-                cfg = dict(api)
-                cfg.setdefault('type', 'AdversarialPerturbationInjection')
-                cfg.setdefault('channels', level_channels)
-                self.api_modules_by_level[str(level)] = MODELS.build(cfg)
+        rng_state = torch.random.get_rng_state()
+        try:
+            for level in self.levels:
+                level_channels = (
+                    channels[level] if isinstance(channels, list) else channels)
+                if dgfe is not None:
+                    cfg = dict(dgfe)
+                    cfg.setdefault('type', 'FeatureDGFE')
+                    cfg.setdefault('channels', level_channels)
+                    self.dgfe_modules[str(level)] = MODELS.build(cfg)
+                if api is not None:
+                    cfg = dict(api)
+                    cfg.setdefault('type', 'AdversarialPerturbationInjection')
+                    cfg.setdefault('channels', level_channels)
+                    self.api_modules_by_level[str(level)] = MODELS.build(cfg)
+        finally:
+            # Wrapping a neck must not change downstream head initialization.
+            torch.random.set_rng_state(rng_state)
 
         self.out_channels = getattr(self.base_neck, 'out_channels',
                                     out_channels)
@@ -383,10 +390,21 @@ class FeatureAugmentNeck(BaseModule):
                 break
         return tuple(outs)
 
+    def normalize_batch_inputs(self, batch_inputs: Tensor) -> Tensor:
+        """Undo detector preprocessing and return an image-space [0, 1] target."""
+        mean = self._input_mean.to(
+            device=batch_inputs.device, dtype=batch_inputs.dtype)
+        std = self._input_std.to(
+            device=batch_inputs.device, dtype=batch_inputs.dtype)
+        return ((batch_inputs * std + mean) / 255.0).clamp(0, 1)
+
     def forward(self,
                 inputs: tuple[Tensor, ...] | list[Tensor],
                 batch_inputs: Tensor | None = None) -> tuple[Tensor, ...]:
         outs = list(self.base_neck(inputs))
+        image_target = None
+        if batch_inputs is not None:
+            image_target = self.normalize_batch_inputs(batch_inputs)
         self._last_dgfe_aux = []
         for level in self.levels:
             key = str(level)
@@ -395,7 +413,7 @@ class FeatureAugmentNeck(BaseModule):
                     raise RuntimeError('DGFE requires batch_inputs.')
                 module = self.dgfe_modules[key]
                 module.last_aux = None
-                outs[level] = module(outs[level], batch_inputs)
+                outs[level] = module(outs[level], image_target)
                 if module.last_aux is not None:
                     aux = dict(module.last_aux)
                     aux['level'] = outs[level].new_tensor(level)

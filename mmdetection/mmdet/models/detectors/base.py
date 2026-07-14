@@ -331,14 +331,11 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
     def build_dgfe_spatial_target(self, logits: Tensor,
                                   batch_inputs: Tensor,
                                   batch_data_samples: SampleList) -> Tensor:
-        target_mode = str(getattr(self.neck, 'dgfe_spatial_target_mode',
-                                  'iou')).lower()
-        if target_mode == 'edge_error':
-            for adapter in self.dgfe_adapters():
-                target = adapter.build_dgfe_spatial_target(
-                    self, logits, batch_inputs, batch_data_samples)
-                if target is not None:
-                    return target
+        for adapter in self.dgfe_adapters():
+            target = adapter.build_dgfe_spatial_target(
+                self, logits, batch_inputs, batch_data_samples)
+            if target is not None:
+                return target
         target = torch.zeros_like(logits)
         _, _, img_h, img_w = batch_inputs.shape
         feat_h, feat_w = logits.shape[-2:]
@@ -413,13 +410,16 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
         rec_gain = float(getattr(self.neck, 'dgfe_rec_gain', 0.0))
         spatial_gain = self.dgfe_spatial_gain()
         if rec_gain > 0:
-            target = self._normalize_inputs(batch_inputs)
             rec_losses = []
             for aux in aux_list:
                 recon = aux.get('recon')
                 if recon is None:
                     continue
-                rec_target = target.to(device=recon.device, dtype=recon.dtype)
+                rec_target = aux.get('image_target')
+                if rec_target is None:
+                    rec_target = self._normalize_inputs(batch_inputs)
+                rec_target = rec_target.to(
+                    device=recon.device, dtype=recon.dtype)
                 if rec_target.shape[-2:] != recon.shape[-2:]:
                     rec_target = F.interpolate(
                         rec_target,

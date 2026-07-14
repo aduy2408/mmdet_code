@@ -71,12 +71,14 @@ class FCOSDGFEHead(DGFEDenseHeadMixin, FCOSHead):
                 _, gt_ids = max_iou_per_box(target_boxes, gt_boxes)
                 assigned_gt = gt_boxes[gt_ids]
                 qualities = aligned_iou(pred_boxes, assigned_gt).detach()
-                for gt_idx, quality in zip(gt_ids.tolist(),
-                                           qualities.tolist()):
+                for local_idx, (gt_idx, quality) in enumerate(zip(
+                        gt_ids.tolist(), qualities.tolist())):
                     records.append({
                         'batch_idx': batch_idx,
                         'level': level,
                         'gt_idx': int(gt_idx),
                         'quality': float(quality),
+                        'pred_box': pred_boxes[local_idx].detach().tolist(),
+                        'target_box': target_boxes[local_idx].detach().tolist(),
                     })
         self._dgfe_assignment_records = records

@@ -6,7 +6,7 @@ dgfe_rec_gain: 0.04
 dgfe_spatial_gain: 0.45
 dgfe_boundary_ring: 1.75
 dgfe_inner_value: 0.15
-dgfe_tiny_area: 64.0
+dgfe_tiny_area: 36.0
 dgfe_neg_pos_ratio: 5
 dgfe_neg_gain: 0.50
 scales:

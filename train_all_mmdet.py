@@ -22,8 +22,8 @@ from PIL import Image
 SPLITS = ("train", "val", "test")
 GT_SOURCES = ("gt_one", "gt_filtered")
 CLASS_POLICIES = ("all", "only-class-1", "drop-class-3", "map-3-to-1")
-VARIANTS = ("base", "dgfe_api", "dgfe_api_roi")
-DGFE_VARIANTS = {"dgfe_api", "dgfe_api_roi"}
+VARIANTS = ("base", "dgfe_only", "dgfe_api", "dgfe_api_roi")
+DGFE_VARIANTS = {"dgfe_only", "dgfe_api", "dgfe_api_roi"}
 AMP_DISABLED_MODELS = {"tood"}
 
 MODEL_CONFIGS = {
@@ -204,11 +204,25 @@ def prepare_coco_dataset(args: argparse.Namespace) -> Path:
     ann_dir.mkdir(parents=True, exist_ok=True)
     split_counts: dict[str, int] = {}
 
+    split_limits = {
+        "train": args.train_limit,
+        "val": args.val_limit,
+        "test": args.test_limit,
+    }
+    manifest: dict[str, list[str]] = {}
     for split in SPLITS:
         selected = split_records[split]
-        if args.limit > 0:
-            selected = selected[: args.limit]
+        limit = split_limits[split]
+        if limit is None:
+            if args.limit > 0:
+                selected = selected[:args.limit]
+        else:
+            selected = selected[:max(limit, 0)]
         split_counts[split] = len(selected)
+        manifest[split] = [
+            f"{record.source_split}/{record.rel_image_path}"
+            for record in selected
+        ]
 
         img_dir = out_dir / "images" / split
         if args.rebuild_dataset and img_dir.exists():
@@ -254,6 +268,8 @@ def prepare_coco_dataset(args: argparse.Namespace) -> Path:
         )
         (ann_dir / f"{split}.json").write_text(json.dumps(coco), encoding="utf-8")
 
+    (out_dir / "split_manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"COCO dataset ready: {out_dir} ({split_counts})")
     return out_dir
 
@@ -340,6 +356,7 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
         out_channels = base_neck[-1].get("out_channels", base_neck[0].get("out_channels", 256))
     else:
         out_channels = base_neck.get("out_channels", 256)
+    data_preprocessor = model.get("data_preprocessor", {})
     model.neck = dict(
         type="FeatureAugmentNeck",
         base_neck=base_neck,
@@ -355,7 +372,7 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
             recon_ratio=args.dgfe_recon_ratio,
             upsample_steps=args.dgfe_upsample_steps,
         ),
-        api=dict(
+        api=None if args._active_variant == "dgfe_only" else dict(
             type="AdversarialPerturbationInjection",
             api_weight=args.api_weight,
             rho=args.api_rho,
@@ -366,6 +383,8 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
             use_fgsm_dropout=args.api_use_fgsm_dropout,
             fgsm_drop_rate=args.api_fgsm_drop_rate,
         ),
+        input_mean=data_preprocessor.get("mean", (0.0, 0.0, 0.0)),
+        input_std=data_preprocessor.get("std", (1.0, 1.0, 1.0)),
         dgfe_rec_gain=args.dgfe_rec_gain,
         dgfe_spatial_gain=args.dgfe_spatial_gain,
         dgfe_spatial_warmup_epochs=args.dgfe_spatial_warmup_epochs,
@@ -375,8 +394,6 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
         dgfe_tiny_area=args.dgfe_tiny_area,
         dgfe_neg_pos_ratio=args.dgfe_neg_pos_ratio,
         dgfe_neg_gain=args.dgfe_neg_gain,
-        dgfe_spatial_target_mode=args.dgfe_spatial_target_mode,
-        dgfe_edge_error_norm=args.dgfe_edge_error_norm,
     )
 
 
@@ -457,6 +474,7 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
         disable_pretrained(cfg.model)
     set_num_classes(cfg.model, 1)
     if variant in DGFE_VARIANTS:
+        args._active_variant = variant
         patch_dgfe_model_specific_head(
             cfg.model, model_name, hybrid=variant == "dgfe_api")
         wrap_dgfe_api_neck(cfg.model, args)
@@ -489,6 +507,14 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
     cfg.train_cfg.val_interval = args.val_interval
     if args.lr is not None:
         cfg.optim_wrapper.optimizer.lr = args.lr
+    elif args.scale_lr_by_batch:
+        base_batch_size = float(cfg.get('auto_scale_lr', {}).get(
+            'base_batch_size', args.batch_size))
+        cfg.optim_wrapper.optimizer.lr *= args.batch_size / base_batch_size
+    if args.fixed_lr:
+        if args.lr is None:
+            raise ValueError('--fixed-lr requires an explicit --lr')
+        cfg.param_scheduler = []
     if args.weight_decay is not None:
         cfg.optim_wrapper.optimizer.weight_decay = args.weight_decay
     set_score_threshold(cfg.model, args.score_thr)
@@ -705,6 +731,8 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
     print(f"RUN {model_name}/{variant} -> {work_dir}")
     run_trusted_checkpoint_command(command, cwd=mmdet_root())
     checkpoint_path = find_trained_checkpoint(work_dir)
+    if args.skip_final_test:
+        return
     result_dir = run_final_test(config_path, checkpoint_path, work_dir)
     write_job_summary(model_name, variant, config_path, checkpoint_path, result_dir, work_dir, started_at)
     upload_work_dir_to_hf(args)
@@ -719,6 +747,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--class-policy", default="map-3-to-1", choices=CLASS_POLICIES)
     parser.add_argument("--only-positives", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--limit", type=int, default=0, help="Max samples per split after shuffling; 0 means full data.")
+    parser.add_argument("--train-limit", type=int, default=None)
+    parser.add_argument("--val-limit", type=int, default=None)
+    parser.add_argument("--test-limit", type=int, default=None)
     parser.add_argument("--copy-images", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--rebuild-dataset", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--models", default="default", help="'default' or comma-separated model names.")
@@ -734,6 +765,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--lr", type=float, default=None, help="Override config optimizer lr; default keeps MMDetection config.")
+    parser.add_argument("--fixed-lr", action="store_true",
+                        help="Remove config schedulers and keep --lr constant.")
+    parser.add_argument("--scale-lr-by-batch", action="store_true",
+                        help="Scale config LR by batch_size/base_batch_size when --lr is omitted.")
     parser.add_argument(
         "--weight-decay",
         type=float,
@@ -791,13 +826,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dgfe-tiny-area", type=float, default=4.0)
     parser.add_argument("--dgfe-neg-pos-ratio", type=int, default=3)
     parser.add_argument("--dgfe-neg-gain", type=float, default=0.25)
-    parser.add_argument("--dgfe-spatial-target-mode", default="iou", choices=("iou", "edge_error"))
-    parser.add_argument("--dgfe-edge-error-norm", type=float, default=0.25)
     parser.add_argument("--hf-repo-id", default="duyle2408/varroa_mmdet_runs")
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument("--hf-token", default="", help="Hugging Face token. Defaults to HF_TOKEN from the environment.")
     parser.add_argument("--no-hf-upload", action="store_true", help="Skip uploading each completed job to Hugging Face.")
     parser.add_argument("--test-only", action="store_true", help="Skip training and run final test/upload for existing job work dirs.")
+    parser.add_argument("--skip-final-test", action="store_true")
     parser.add_argument(
         "--test-checkpoint",
         default="",

@@ -15,9 +15,9 @@ the DGFE spatial target. Boxgrad accepts ROI `loss_bbox` keys and excludes RPN
 and classification losses.
 
 FCOS uses `FCOSDGFEHead` to decode positive point targets and predictions per
-FPN level. Its edge-error quality is aligned predicted-box IoU against the GT
-assigned by FCOS; centerness is deliberately excluded. A synthetic
-edge-error/boxgrad run produced 16 assignment records, included
+FPN level. Its spatial quality is aligned predicted-box IoU against the GT
+assigned by FCOS; centerness is deliberately excluded. A synthetic DGFE/API
+run produced 16 assignment records, included
 `loss_dgfe_spatial`, and retained one backbone/neck pass with two head passes.
 
 ## Candidate outcome

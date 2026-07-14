@@ -26,8 +26,6 @@ class DummyNeck(nn.Module):
         self.dgfe_tiny_area = 2.0
         self.dgfe_neg_pos_ratio = 2
         self.dgfe_neg_gain = 0.5
-        self.dgfe_spatial_target_mode = 'iou'
-        self.dgfe_edge_error_norm = 1.0
         self.dgfe_epoch = 0
         self._aux = aux or []
 
@@ -59,7 +57,13 @@ class DummyAdapter(DGFEDenseHeadMixin, nn.Module):
     def __init__(self):
         super().__init__()
         self._dgfe_assignment_records = [
-            dict(batch_idx=0, level=0, gt_idx=0, quality=0.25)
+            dict(
+                batch_idx=0,
+                level=0,
+                gt_idx=0,
+                quality=0.25,
+                pred_box=[0, 8, 24, 24],
+                target_box=[8, 8, 24, 24])
         ]
 
 
@@ -68,7 +72,6 @@ class DummyAdapterDetector(DummyDetector):
     def __init__(self):
         super().__init__()
         self.bbox_head = DummyAdapter()
-        self.neck.dgfe_spatial_target_mode = 'edge_error'
 
 
 def _sample(boxes):
@@ -113,7 +116,7 @@ def test_boxgrad_loss_name_filtering():
     }
 
 
-def test_dgfe_adapter_edge_error_target():
+def test_dgfe_adapter_iou_target():
     detector = DummyAdapterDetector()
     logits = torch.zeros(1, 1, 8, 8)
     batch_inputs = torch.rand(1, 3, 32, 32)
@@ -123,7 +126,7 @@ def test_dgfe_adapter_edge_error_target():
                                                 data_samples)
 
     assert target.shape == logits.shape
-    assert target.max() == 0.75
+    assert target.max() == 0.25
     assert detector.dgfe_localization_loss_names({
         'loss_cls': torch.tensor(1.0),
         'loss_bbox': torch.tensor(1.0),
@@ -152,6 +155,47 @@ def test_patch_dgfe_model_specific_head():
     patch_dgfe_model_specific_head(model, 'cascade_rcnn', hybrid=False)
     assert model['type'] == 'CascadeRCNN'
     assert model['roi_head']['type'] == 'DGFECascadeRoIHead'
+
+
+def test_dgfe_input_target_undoes_detector_preprocessing():
+    neck = FeatureAugmentNeck(
+        base_neck=dict(
+            type='FPN', in_channels=[8], out_channels=8, num_outs=1),
+        out_channels=8,
+        input_mean=(10., 20., 30.),
+        input_std=(2., 4., 5.))
+    raw = torch.tensor([40., 80., 120.]).view(1, 3, 1, 1)
+    preprocessed = (raw - neck._input_mean) / neck._input_std
+    recovered = neck.normalize_batch_inputs(preprocessed)
+    assert torch.allclose(recovered, raw / 255.)
+
+
+def test_dgfe_wrapper_preserves_downstream_initialization_rng():
+    cfg = dict(type='FPN', in_channels=[8], out_channels=8, num_outs=1)
+    torch.manual_seed(7)
+    from mmdet.registry import MODELS
+    MODELS.build(cfg)
+    expected = torch.rand(8)
+
+    torch.manual_seed(7)
+    FeatureAugmentNeck(
+        base_neck=cfg,
+        out_channels=8,
+        dgfe=dict(type='FeatureDGFE', upsample_steps=1))
+    actual = torch.rand(8)
+    assert torch.equal(actual, expected)
+
+
+def test_dgfe_tiny_quality_target_does_not_collapse_to_zero():
+    detector = DummyAdapterDetector()
+    detector.neck.dgfe_tiny_area = 36
+    detector.bbox_head._dgfe_assignment_records = [
+        dict(batch_idx=0, level=0, gt_idx=0, quality=0.8)
+    ]
+    logits = torch.zeros(1, 1, 8, 8)
+    target = detector.build_dgfe_spatial_target(
+        logits, torch.rand(1, 3, 32, 32), [_sample([[8, 8, 12, 12]])])
+    assert target.max() == torch.tensor(0.8)
 
 
 class _IdentityCoder:
@@ -279,8 +323,12 @@ def test_fcos_dgfe_exact_assignment_and_norm_scaling():
     head._collect_dgfe_records([bbox_pred], [gt])
     records = head.dgfe_assignment_records()
     assert len(records) == 1
-    assert records[0] == dict(
-        batch_idx=0, level=0, gt_idx=0, quality=1.0)
+    assert records[0]['batch_idx'] == 0
+    assert records[0]['level'] == 0
+    assert records[0]['gt_idx'] == 0
+    assert records[0]['quality'] == 1.0
+    assert records[0]['pred_box'] == [0., 0., 8., 8.]
+    assert records[0]['target_box'] == [0., 0., 8., 8.]
 
     head._dgfe_last_targets = None
     head._collect_dgfe_records([bbox_pred], [gt])
