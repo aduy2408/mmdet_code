@@ -78,11 +78,15 @@ class SingleStageDetector(BaseDetector):
             self.capture_api()
         x = self.extract_feat(batch_inputs)
         losses = self.bbox_head.loss(x, batch_data_samples)
+        losses = self.add_dgfe_losses(losses, batch_inputs,
+                                      batch_data_samples)
         if self.has_api_loss():
             losses = self.api_augmented_losses(
                 batch_inputs, batch_data_samples, losses,
                 lambda: self.bbox_head.loss(
-                    self.extract_feat(batch_inputs), batch_data_samples))
+                    self.extract_feat(batch_inputs), batch_data_samples),
+                replay_losses=lambda features: self.bbox_head.loss(
+                    features, batch_data_samples))
         return losses
 
     def predict(self,

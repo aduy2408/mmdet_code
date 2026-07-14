@@ -160,11 +160,18 @@ class TwoStageDetector(BaseDetector):
         x = self.extract_feat(batch_inputs)
 
         losses = self.loss_from_features(x, batch_data_samples)
+        losses = self.add_dgfe_losses(losses, batch_inputs,
+                                      batch_data_samples)
         if self.has_api_loss():
+            replay_losses = (
+                lambda features: self.dgfe_replay_losses(
+                    features, batch_data_samples)
+            ) if hasattr(self, 'dgfe_replay_losses') else None
             losses = self.api_augmented_losses(
                 batch_inputs, batch_data_samples, losses,
                 lambda: self.loss_from_features(
-                    self.extract_feat(batch_inputs), batch_data_samples))
+                    self.extract_feat(batch_inputs), batch_data_samples),
+                replay_losses=replay_losses)
         return losses
 
     def loss_from_features(self, x: Tuple[Tensor],

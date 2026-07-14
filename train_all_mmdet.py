@@ -22,7 +22,8 @@ from PIL import Image
 SPLITS = ("train", "val", "test")
 GT_SOURCES = ("gt_one", "gt_filtered")
 CLASS_POLICIES = ("all", "only-class-1", "drop-class-3", "map-3-to-1")
-VARIANTS = ("base", "dgfe_api")
+VARIANTS = ("base", "dgfe_api", "dgfe_api_roi")
+DGFE_VARIANTS = {"dgfe_api", "dgfe_api_roi"}
 AMP_DISABLED_MODELS = {"tood"}
 
 MODEL_CONFIGS = {
@@ -68,6 +69,12 @@ def mmdet_root() -> Path:
 
 def ensure_mmdet_imports() -> None:
     root = str(mmdet_root())
+    if root not in sys.path:
+        sys.path.insert(0, root)
+
+
+def ensure_dgfe_project_imports() -> None:
+    root = str(repo_root())
     if root not in sys.path:
         sys.path.insert(0, root)
 
@@ -294,7 +301,7 @@ def checkpoint_state_dict(checkpoint_path: Path) -> dict[str, Any]:
 
 def candidate_checkpoint_keys(key: str, variant: str) -> list[str]:
     keys = [key]
-    if variant == "dgfe_api" and key.startswith("neck."):
+    if variant in DGFE_VARIANTS and key.startswith("neck."):
         keys.insert(0, f"neck.base_neck.{key[len('neck.'):]}")  # wrapped neck
     return keys
 
@@ -353,8 +360,50 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
             api_weight=args.api_weight,
             rho=args.api_rho,
             target_mode=args.api_target_mode,
+            use_rho_warmup=args.api_use_rho_warmup,
+            warmup_epochs=args.api_warmup_epochs,
+            use_per_box_norm=args.api_use_per_box_norm,
+            use_fgsm_dropout=args.api_use_fgsm_dropout,
+            fgsm_drop_rate=args.api_fgsm_drop_rate,
         ),
+        dgfe_rec_gain=args.dgfe_rec_gain,
+        dgfe_spatial_gain=args.dgfe_spatial_gain,
+        dgfe_spatial_warmup_epochs=args.dgfe_spatial_warmup_epochs,
+        dgfe_spatial_warmup_start=args.dgfe_spatial_warmup_start,
+        dgfe_boundary_ring=args.dgfe_boundary_ring,
+        dgfe_inner_value=args.dgfe_inner_value,
+        dgfe_tiny_area=args.dgfe_tiny_area,
+        dgfe_neg_pos_ratio=args.dgfe_neg_pos_ratio,
+        dgfe_neg_gain=args.dgfe_neg_gain,
+        dgfe_spatial_target_mode=args.dgfe_spatial_target_mode,
+        dgfe_edge_error_norm=args.dgfe_edge_error_norm,
     )
+
+
+def patch_dgfe_model_specific_head(
+    model: Any, model_name: str, *, hybrid: bool = True
+) -> None:
+    head_types = {
+        "atss": "ATSSDGFEHead",
+        "tood": "TOODDGFEHead",
+        "fcos": "FCOSDGFEHead",
+    }
+    head_type = head_types.get(model_name)
+    if head_type and isinstance(model.get("bbox_head"), dict):
+        model["bbox_head"]["type"] = head_type
+    roi_types = {
+        "faster_rcnn": "DGFEStandardRoIHead",
+        "cascade_rcnn": "DGFECascadeRoIHead",
+    }
+    detector_types = {
+        "faster_rcnn": "DGFEFasterRCNN",
+        "cascade_rcnn": "DGFECascadeRCNN",
+    }
+    roi_type = roi_types.get(model_name)
+    if roi_type and isinstance(model.get("roi_head"), dict):
+        model["roi_head"]["type"] = roi_type
+        if hybrid:
+            model["type"] = detector_types[model_name]
 
 
 def patch_dataset_cfg(dataset: Any, dataset_out: Path, split: str) -> None:
@@ -407,8 +456,15 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
     if not args.keep_pretrained_init:
         disable_pretrained(cfg.model)
     set_num_classes(cfg.model, 1)
-    if variant == "dgfe_api":
+    if variant in DGFE_VARIANTS:
+        patch_dgfe_model_specific_head(
+            cfg.model, model_name, hybrid=variant == "dgfe_api")
         wrap_dgfe_api_neck(cfg.model, args)
+        custom_imports = list(cfg.get("custom_imports", {}).get("imports", []))
+        if "dgfe_project" not in custom_imports:
+            custom_imports.append("dgfe_project")
+        cfg.custom_imports = dict(
+            imports=custom_imports, allow_failed_imports=False)
 
     cfg.val_dataloader = deepcopy(cfg.val_dataloader)
     cfg.test_dataloader = deepcopy(cfg.test_dataloader)
@@ -458,6 +514,11 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
                 min_delta=args.early_stop_min_delta,
             )
         )
+    if variant in DGFE_VARIANTS:
+        cfg.custom_hooks = list(cfg.get("custom_hooks", []))
+        if not any(hook.get("type") == "SetEpochInfoHook"
+                   for hook in cfg.custom_hooks if isinstance(hook, dict)):
+            cfg.custom_hooks.append(dict(type="SetEpochInfoHook"))
     cfg.log_processor = dict(type="LogProcessor", window_size=1, by_epoch=True)
     cfg.randomness = dict(seed=args.seed)
     return cfg
@@ -465,6 +526,9 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
 
 def write_patched_config(model_name: str, variant: str, args: argparse.Namespace, dataset_out: Path) -> Path:
     ensure_mmdet_imports()
+    if variant in DGFE_VARIANTS:
+        ensure_dgfe_project_imports()
+        import dgfe_project  # noqa: F401
     from mmengine.config import Config
     from mmdet.utils import register_all_modules
 
@@ -522,6 +586,9 @@ def utc_now() -> str:
 def run_trusted_checkpoint_command(command: list[str], *, cwd: Path) -> None:
     env = os.environ.copy()
     env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(repo_root()), str(mmdet_root()),
+         env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
     subprocess.run(command, cwd=str(cwd), env=env, check=True)
 
 
@@ -655,7 +722,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--copy-images", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--rebuild-dataset", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--models", default="default", help="'default' or comma-separated model names.")
-    parser.add_argument("--variants", default="all", help="'all' or comma-separated: base,dgfe_api.")
+    parser.add_argument(
+        "--variants",
+        default="all",
+        help="'all' or comma-separated: base,dgfe_api,dgfe_api_roi.",
+    )
     parser.add_argument("--include-mask-models", action="store_true")
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument("--machine-index", type=int, default=0)
@@ -698,6 +769,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-weight", type=float, default=0.01)
     parser.add_argument("--api-rho", type=float, default=0.001)
     parser.add_argument("--api-target-mode", default="foreground")
+    parser.add_argument("--api-use-rho-warmup", action="store_true")
+    parser.add_argument("--api-warmup-epochs", type=int, default=10)
+    parser.add_argument("--api-use-per-box-norm", action="store_true")
+    parser.add_argument("--api-use-fgsm-dropout", action="store_true")
+    parser.add_argument("--api-fgsm-drop-rate", type=float, default=0.1)
     parser.add_argument("--dgfe-levels", type=int, nargs="+", default=[0])
     parser.add_argument("--dgfe-reduction", type=int, default=8)
     parser.add_argument("--dgfe-threshold", type=float, default=0.0156862)
@@ -706,6 +782,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dgfe-alpha-max", type=float, default=1.0)
     parser.add_argument("--dgfe-recon-ratio", type=float, default=0.5)
     parser.add_argument("--dgfe-upsample-steps", type=int, default=1)
+    parser.add_argument("--dgfe-rec-gain", type=float, default=0.0)
+    parser.add_argument("--dgfe-spatial-gain", type=float, default=0.0)
+    parser.add_argument("--dgfe-spatial-warmup-epochs", type=int, default=0)
+    parser.add_argument("--dgfe-spatial-warmup-start", type=float, default=0.1)
+    parser.add_argument("--dgfe-boundary-ring", type=float, default=1.0)
+    parser.add_argument("--dgfe-inner-value", type=float, default=0.3)
+    parser.add_argument("--dgfe-tiny-area", type=float, default=4.0)
+    parser.add_argument("--dgfe-neg-pos-ratio", type=int, default=3)
+    parser.add_argument("--dgfe-neg-gain", type=float, default=0.25)
+    parser.add_argument("--dgfe-spatial-target-mode", default="iou", choices=("iou", "edge_error"))
+    parser.add_argument("--dgfe-edge-error-norm", type=float, default=0.25)
     parser.add_argument("--hf-repo-id", default="duyle2408/varroa_mmdet_runs")
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument("--hf-token", default="", help="Hugging Face token. Defaults to HF_TOKEN from the environment.")

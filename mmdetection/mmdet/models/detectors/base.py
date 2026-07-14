@@ -1,8 +1,10 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import math
 from abc import ABCMeta, abstractmethod
 from typing import Dict, List, Tuple, Union
 
 import torch
+import torch.nn.functional as F
 from mmengine.model import BaseModel
 from torch import Tensor
 
@@ -163,6 +165,10 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
             return self.neck(feats, batch_inputs=batch_inputs)
         return self.neck(feats)
 
+    def set_epoch(self, epoch: int) -> None:
+        if self.with_neck and hasattr(self.neck, 'set_epoch'):
+            self.neck.set_epoch(epoch)
+
     def api_modules(self) -> list:
         if not self.with_neck:
             return []
@@ -184,11 +190,24 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
         if hasattr(self.neck, 'perturb_api'):
             self.neck.perturb_api()
 
+    def dgfe_aux_list(self) -> list:
+        if not self.with_neck or not hasattr(self.neck, 'dgfe_aux_list'):
+            return []
+        return self.neck.dgfe_aux_list()
+
+    def dgfe_adapters(self) -> list:
+        adapters = []
+        for name in ('bbox_head', 'roi_head', 'rpn_head'):
+            module = getattr(self, name, None)
+            if module is not None and hasattr(module, 'build_dgfe_spatial_target'):
+                adapters.append(module)
+        return adapters
+
     @staticmethod
-    def sum_loss_dict(losses: dict) -> Tensor:
+    def _loss_terms(losses: dict, names: set[str] | None = None) -> Tensor:
         total = None
         for name, value in losses.items():
-            if 'loss' not in name:
+            if 'loss' not in name or (names is not None and name not in names):
                 continue
             if isinstance(value, Tensor):
                 loss = value.mean()
@@ -198,8 +217,48 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
                 continue
             total = loss if total is None else total + loss
         if total is None:
-            raise RuntimeError('No differentiable loss found for API.')
+            raise RuntimeError('No differentiable loss found.')
         return total
+
+    @staticmethod
+    def sum_loss_dict(losses: dict) -> Tensor:
+        return BaseDetector._loss_terms(losses)
+
+    @staticmethod
+    def is_boxgrad_mode(target_mode: str) -> bool:
+        return str(target_mode).lower() in {
+            'boxgrad', 'locgrad', 'localization', 'bbox', 'box'
+        }
+
+    @staticmethod
+    def is_localization_loss_name(name: str) -> bool:
+        name_l = name.lower()
+        if 'loss' not in name_l:
+            return False
+        if any(skip in name_l for skip in (
+                'cls', 'class', 'centerness', 'object', 'obj', 'api',
+                'dgfe')):
+            return False
+        return any(key in name_l for key in (
+            'bbox', 'box', 'iou', 'giou', 'diou', 'ciou', 'dfl', 'reg',
+            'l1'))
+
+    @classmethod
+    def localization_loss_names(cls, losses: dict) -> set[str]:
+        return {
+            name
+            for name, value in losses.items()
+            if cls.is_localization_loss_name(name)
+            and isinstance(value, (Tensor, list, tuple))
+        }
+
+    def dgfe_localization_loss_names(self, losses: dict) -> set[str]:
+        names = set()
+        for adapter in self.dgfe_adapters():
+            getter = getattr(adapter, 'dgfe_localization_loss_names', None)
+            if getter is not None:
+                names.update(getter(losses))
+        return names or self.localization_loss_names(losses)
 
     @staticmethod
     def scale_loss_dict(losses: dict, weight: float, prefix: str) -> dict:
@@ -213,6 +272,20 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
             elif isinstance(value, tuple):
                 scaled[key] = tuple(v * weight for v in value)
         return scaled
+
+    @staticmethod
+    def scale_selected_loss_dict(losses: dict, weight: float,
+                                 prefix: str, names: set[str]) -> dict:
+        return BaseDetector.scale_loss_dict(
+            {name: value for name, value in losses.items() if name in names},
+            weight, prefix)
+
+    @staticmethod
+    def _normalize_inputs(batch_inputs: Tensor) -> Tensor:
+        img = batch_inputs
+        img_min = img.amin(dim=(2, 3), keepdim=True)
+        img_max = img.amax(dim=(2, 3), keepdim=True)
+        return (img - img_min) / (img_max - img_min).clamp(min=1e-6)
 
     @staticmethod
     def build_api_target(batch_inputs: Tensor,
@@ -249,10 +322,150 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
                     target[batch_idx, :, y1:y2, x1:x2] = 1
         return target
 
+    @staticmethod
+    def _slice_from_box(start: float, end: float, limit: int) -> tuple[int, int]:
+        start_i = max(0, min(limit - 1, int(math.floor(start))))
+        end_i = max(start_i + 1, min(limit, int(math.ceil(end))))
+        return start_i, end_i
+
+    def build_dgfe_spatial_target(self, logits: Tensor,
+                                  batch_inputs: Tensor,
+                                  batch_data_samples: SampleList) -> Tensor:
+        target_mode = str(getattr(self.neck, 'dgfe_spatial_target_mode',
+                                  'iou')).lower()
+        if target_mode == 'edge_error':
+            for adapter in self.dgfe_adapters():
+                target = adapter.build_dgfe_spatial_target(
+                    self, logits, batch_inputs, batch_data_samples)
+                if target is not None:
+                    return target
+        target = torch.zeros_like(logits)
+        _, _, img_h, img_w = batch_inputs.shape
+        feat_h, feat_w = logits.shape[-2:]
+        ring = max(float(getattr(self.neck, 'dgfe_boundary_ring', 1.0)), 0.0)
+        inner_value = max(
+            min(float(getattr(self.neck, 'dgfe_inner_value', 0.3)), 1.0),
+            0.0)
+        tiny_area = float(getattr(self.neck, 'dgfe_tiny_area', 4.0))
+
+        def write_max(region: Tensor, value: float) -> None:
+            if region.numel():
+                region.copy_(torch.maximum(
+                    region, torch.full_like(region, value)))
+
+        for batch_idx, data_sample in enumerate(batch_data_samples):
+            bboxes = data_sample.gt_instances.bboxes
+            bboxes = bboxes.tensor if hasattr(bboxes, 'tensor') else bboxes
+            if bboxes.numel() == 0:
+                continue
+            boxes = bboxes.to(device=logits.device, dtype=logits.dtype)
+            for box in boxes:
+                x1, y1, x2, y2 = [float(v) for v in box]
+                fx1, fx2 = x1 * feat_w / img_w, x2 * feat_w / img_w
+                fy1, fy2 = y1 * feat_h / img_h, y2 * feat_h / img_h
+                if fx2 <= fx1 or fy2 <= fy1:
+                    continue
+                ix1, ix2 = self._slice_from_box(fx1, fx2, feat_w)
+                iy1, iy2 = self._slice_from_box(fy1, fy2, feat_h)
+                if (ix2 - ix1) * (iy2 - iy1) <= tiny_area:
+                    write_max(target[batch_idx, :, iy1:iy2, ix1:ix2], 1.0)
+                    continue
+                write_max(target[batch_idx, :, iy1:iy2, ix1:ix2],
+                          inner_value)
+                edge = max(int(math.ceil(ring)), 1)
+                write_max(target[batch_idx, :, iy1:min(iy1 + edge, iy2),
+                                 ix1:ix2], 1.0)
+                write_max(target[batch_idx, :, max(iy2 - edge, iy1):iy2,
+                                 ix1:ix2], 1.0)
+                write_max(target[batch_idx, :, iy1:iy2,
+                                 ix1:min(ix1 + edge, ix2)], 1.0)
+                write_max(target[batch_idx, :, iy1:iy2,
+                                 max(ix2 - edge, ix1):ix2], 1.0)
+
+                ox1, ox2 = self._slice_from_box(fx1 - ring, fx2 + ring,
+                                                feat_w)
+                oy1, oy2 = self._slice_from_box(fy1 - ring, fy2 + ring,
+                                                feat_h)
+                write_max(target[batch_idx, :, oy1:iy1, ox1:ox2], 1.0)
+                write_max(target[batch_idx, :, iy2:oy2, ox1:ox2], 1.0)
+                write_max(target[batch_idx, :, iy1:iy2, ox1:ix1], 1.0)
+                write_max(target[batch_idx, :, iy1:iy2, ix2:ox2], 1.0)
+        return target
+
+    def dgfe_spatial_gain(self) -> float:
+        gain = float(getattr(self.neck, 'dgfe_spatial_gain', 0.0))
+        warmup_epochs = int(getattr(self.neck, 'dgfe_spatial_warmup_epochs',
+                                    0))
+        if warmup_epochs <= 0:
+            return gain
+        epoch = float(getattr(self.neck, 'dgfe_epoch', 0))
+        t = min(max(epoch, 0.0) / max(float(warmup_epochs), 1.0), 1.0)
+        start = float(getattr(self.neck, 'dgfe_spatial_warmup_start', 0.1))
+        return gain * (start + (1.0 - start) * t)
+
+    def add_dgfe_losses(self, losses: dict, batch_inputs: Tensor,
+                        batch_data_samples: SampleList) -> dict:
+        if not self.with_neck:
+            return losses
+        aux_list = self.dgfe_aux_list()
+        if not aux_list:
+            return losses
+        rec_gain = float(getattr(self.neck, 'dgfe_rec_gain', 0.0))
+        spatial_gain = self.dgfe_spatial_gain()
+        if rec_gain > 0:
+            target = self._normalize_inputs(batch_inputs)
+            rec_losses = []
+            for aux in aux_list:
+                recon = aux.get('recon')
+                if recon is None:
+                    continue
+                rec_target = target.to(device=recon.device, dtype=recon.dtype)
+                if rec_target.shape[-2:] != recon.shape[-2:]:
+                    rec_target = F.interpolate(
+                        rec_target,
+                        size=recon.shape[-2:],
+                        mode='bilinear',
+                        align_corners=False)
+                rec_losses.append(F.smooth_l1_loss(recon, rec_target))
+            if rec_losses:
+                losses['loss_dgfe_rec'] = torch.stack(rec_losses).mean(
+                ) * rec_gain
+        if spatial_gain > 0:
+            spatial_losses = []
+            neg_ratio = max(int(getattr(self.neck, 'dgfe_neg_pos_ratio', 3)),
+                            1)
+            neg_gain = float(getattr(self.neck, 'dgfe_neg_gain', 0.25))
+            for aux in aux_list:
+                logits = aux.get('spatial_logits')
+                if logits is None:
+                    continue
+                target = self.build_dgfe_spatial_target(
+                    logits, batch_inputs, batch_data_samples)
+                target = target.to(dtype=logits.dtype)
+                bce = F.binary_cross_entropy_with_logits(
+                    logits, target, reduction='none')
+                pos_mask = target > 0
+                if not pos_mask.any():
+                    spatial_losses.append(logits.sum() * 0.0)
+                    continue
+                pos_loss = bce[pos_mask].mean()
+                neg = bce[~pos_mask]
+                neg_loss = logits.sum() * 0.0
+                if neg.numel():
+                    k = min(int(pos_mask.sum().item()) * neg_ratio,
+                            neg.numel())
+                    neg_loss = neg.topk(k).values.mean()
+                spatial_losses.append(pos_loss + neg_gain * neg_loss)
+            if spatial_losses:
+                losses['loss_dgfe_spatial'] = torch.stack(
+                    spatial_losses).mean() * spatial_gain
+        return losses
+
     def api_augmented_losses(self, batch_inputs: Tensor,
                              batch_data_samples: SampleList,
                              clean_losses: dict,
-                             compute_losses):
+                             compute_losses,
+                             replay_losses=None):
         api_modules = self.api_modules()
         if not api_modules:
             return clean_losses
@@ -264,24 +477,41 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
         try:
             if api.captured is None:
                 return clean_losses
-            clean_total = self.sum_loss_dict(clean_losses)
+            boxgrad = self.is_boxgrad_mode(api.target_mode)
+            loc_names = self.dgfe_localization_loss_names(clean_losses)
+            clean_total = (self._loss_terms(clean_losses, loc_names)
+                           if boxgrad and loc_names else
+                           self.sum_loss_dict(clean_losses))
             target = self.build_api_target(batch_inputs, batch_data_samples,
                                            api.captured, api.target_mode)
-            aux_loss = api.auxiliary_loss(target)
+            aux_loss = (api.captured.sum() * 0.0
+                        if boxgrad else api.auxiliary_loss(target))
             grad = torch.autograd.grad(
                 clean_total + aux_loss,
                 api.captured,
                 retain_graph=True,
                 allow_unused=True)[0]
-            if not api.set_perturbation_from_grad(grad):
+            if not api.set_perturbation_from_grad(grad, batch_inputs,
+                                                  batch_data_samples):
                 return clean_losses
 
             self.perturb_api()
-            adv_losses = compute_losses()
+            perturbed_features = None
+            if replay_losses is not None and hasattr(self.neck,
+                                                      'perturb_features'):
+                perturbed_features = self.neck.perturb_features()
+            adv_losses = (replay_losses(perturbed_features)
+                          if perturbed_features is not None
+                          else compute_losses())
             weight = api.current_api_weight
-            clean_losses.update(self.scale_loss_dict(adv_losses, weight,
-                                                     'api_adv_'))
-            clean_losses['loss_api_aux'] = aux_loss * weight
+            if boxgrad and loc_names:
+                clean_losses.update(
+                    self.scale_selected_loss_dict(adv_losses, weight,
+                                                  'api_adv_', loc_names))
+            else:
+                clean_losses.update(
+                    self.scale_loss_dict(adv_losses, weight, 'api_adv_'))
+                clean_losses['loss_api_aux'] = aux_loss * weight
             return clean_losses
         finally:
             self.clear_api_state()

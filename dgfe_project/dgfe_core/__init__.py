@@ -1,0 +1,2 @@
+"""Shared DGFE adapter helpers."""
+
