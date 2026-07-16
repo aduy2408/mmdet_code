@@ -341,6 +341,7 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
             rho=args.api_rho,
             target_mode=args.api_target_mode,
             forward_mode=args.api_forward_mode,
+            guidance_mode=args.api_guidance_mode,
         )
     model.neck = dict(
         type="FeatureAugmentNeck",
@@ -702,6 +703,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-weight", type=float, default=0.01)
     parser.add_argument("--api-rho", type=float, default=0.001)
     parser.add_argument("--api-target-mode", default="foreground")
+    parser.add_argument(
+        "--api-guidance-mode",
+        default="none",
+        choices=("none", "dgfe"),
+        help="Optionally focus API perturbations with the DGFE anomaly map.",
+    )
     parser.add_argument(
         "--api-forward-mode",
         default="partial",

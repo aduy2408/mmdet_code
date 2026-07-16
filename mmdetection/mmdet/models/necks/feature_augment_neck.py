@@ -97,7 +97,8 @@ class FeatureDGFE(BaseModule):
         logits = F.interpolate(
             logits_img, size=x.shape[-2:], mode='bilinear',
             align_corners=False)
-        spatial_gate = 1.0 + torch.sigmoid(logits)
+        spatial_prob = torch.sigmoid(logits)
+        spatial_gate = 1.0 + spatial_prob
 
         avg_gate = self.channel_mlp(F.adaptive_avg_pool2d(x, 1))
         max_gate = self.channel_mlp(F.adaptive_max_pool2d(x, 1))
@@ -105,6 +106,7 @@ class FeatureDGFE(BaseModule):
         alpha = self.alpha.to(device=x.device, dtype=x.dtype)
         out = x * (1.0 + alpha * (channel_gate * spatial_gate - 1.0))
         self.last_aux = dict(recon=recon, spatial_logits=logits,
+                             spatial_prob=spatial_prob,
                              spatial_gate=spatial_gate,
                              alpha=alpha.reshape(1)) if self.training else None
         return out
@@ -120,6 +122,7 @@ class AdversarialPerturbationInjection(BaseModule):
                  api_weight: float = 0.25,
                  target_mode: str = 'foreground',
                  forward_mode: str = 'partial',
+                 guidance_mode: str = 'none',
                  eps: float = 1e-6,
                  init_cfg: OptConfigType = None) -> None:
         super().__init__(init_cfg=init_cfg)
@@ -129,11 +132,15 @@ class AdversarialPerturbationInjection(BaseModule):
         if forward_mode not in {'partial', 'full'}:
             raise ValueError('forward_mode must be "partial" or "full".')
         self.forward_mode = forward_mode
+        if guidance_mode not in {'none', 'dgfe'}:
+            raise ValueError('guidance_mode must be "none" or "dgfe".')
+        self.guidance_mode = guidance_mode
         self.eps = max(float(eps), 1e-12)
         self.aux_head = nn.Conv2d(channels, 1, 1)
         self.mode = 'off'
         self.captured: Tensor | None = None
         self.perturbation: Tensor | None = None
+        self.spatial_guidance: Tensor | None = None
 
     @property
     def current_rho(self) -> float:
@@ -147,6 +154,7 @@ class AdversarialPerturbationInjection(BaseModule):
         self.mode = 'off'
         self.captured = None
         self.perturbation = None
+        self.spatial_guidance = None
 
     def capture(self) -> None:
         self.clear_state()
@@ -155,13 +163,33 @@ class AdversarialPerturbationInjection(BaseModule):
     def perturb(self) -> None:
         self.mode = 'perturb'
 
+    def set_spatial_guidance(self, guidance: Tensor) -> None:
+        self.spatial_guidance = guidance.detach()
+
     def set_perturbation_from_grad(self, grad: Tensor | None) -> bool:
         if grad is None or self.current_rho == 0 or self.current_api_weight == 0:
             self.perturbation = None
             return False
         grad_f = grad.detach().float()
-        norm = grad_f.flatten(1).norm(p=2, dim=1).clamp(
-            min=self.eps).view(-1, 1, 1, 1)
+        if self.guidance_mode == 'dgfe':
+            if self.spatial_guidance is None:
+                self.perturbation = None
+                return False
+            guidance = self.spatial_guidance.to(
+                device=grad.device, dtype=torch.float32)
+            if guidance.shape[0] != grad_f.shape[0]:
+                self.perturbation = None
+                return False
+            if guidance.shape[-2:] != grad_f.shape[-2:]:
+                guidance = F.interpolate(
+                    guidance, size=grad_f.shape[-2:], mode='bilinear',
+                    align_corners=False)
+            grad_f = grad_f * guidance.clamp(0.0, 1.0)
+        norm = grad_f.flatten(1).norm(p=2, dim=1)
+        if not torch.isfinite(norm).all() or (norm <= self.eps).any():
+            self.perturbation = None
+            return False
+        norm = norm.view(-1, 1, 1, 1)
         perturbation = grad_f / norm * self.current_rho
         if not torch.isfinite(perturbation).all():
             self.perturbation = None
@@ -198,7 +226,7 @@ class AdversarialPerturbationInjection(BaseModule):
 
 @MODELS.register_module()
 class FeatureAugmentNeck(BaseModule):
-    """Wrap a normal neck and apply optional DGFE/API modules to output levels."""
+    """Wrap a normal neck and apply optional DGFE/API modules to outputs."""
 
     needs_batch_inputs = True
 
@@ -208,7 +236,7 @@ class FeatureAugmentNeck(BaseModule):
                  out_channels: int | Sequence[int] | None = None,
                  dgfe: OptConfigType = None,
                  api: OptConfigType = None,
-        init_cfg: OptConfigType = None) -> None:
+                 init_cfg: OptConfigType = None) -> None:
         super().__init__(init_cfg=init_cfg)
         self.base_neck = self._build_base_neck(base_neck)
         self.levels = tuple(int(level) for level in levels)
@@ -279,5 +307,13 @@ class FeatureAugmentNeck(BaseModule):
                     raise RuntimeError('DGFE requires batch_inputs.')
                 outs[level] = self.dgfe_modules[key](outs[level], batch_inputs)
             if key in self.api_modules_by_level:
-                outs[level] = self.api_modules_by_level[key](outs[level])
+                api = self.api_modules_by_level[key]
+                if api.guidance_mode == 'dgfe' and self.training:
+                    dgfe = (self.dgfe_modules[key]
+                            if key in self.dgfe_modules else None)
+                    if dgfe is None or dgfe.last_aux is None:
+                        raise RuntimeError(
+                            'DGFE-guided API requires a training DGFE output.')
+                    api.set_spatial_guidance(dgfe.last_aux['spatial_prob'])
+                outs[level] = api(outs[level])
         return tuple(outs)

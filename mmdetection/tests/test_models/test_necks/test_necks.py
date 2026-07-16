@@ -157,9 +157,49 @@ def test_feature_augment_neck():
     loss = api.auxiliary_loss(target) + outs[0].sum()
     grad = torch.autograd.grad(loss, api.captured, retain_graph=True)[0]
     assert api.set_perturbation_from_grad(grad)
+    assert api.spatial_guidance is None
+    norms = api.perturbation.float().flatten(1).norm(p=2, dim=1)
+    assert torch.allclose(norms, torch.full_like(norms, api.rho))
     neck.perturb_api()
     perturbed_outs = neck(feats, batch_inputs=imgs)
     assert perturbed_outs[0].shape == outs[0].shape
+
+
+def test_dgfe_guided_api_perturbation():
+    api = AdversarialPerturbationInjection(
+        channels=2, rho=0.2, api_weight=1.0, guidance_mode='dgfe')
+    grad = torch.ones(2, 2, 2, 2)
+    guidance = torch.tensor([[[[1.0, 0.0], [1.0, 0.0]]]]).expand(
+        2, -1, -1, -1)
+    api.set_spatial_guidance(guidance)
+
+    assert api.set_perturbation_from_grad(grad)
+    perturbation = api.perturbation
+    assert perturbation is not None
+    assert torch.count_nonzero(perturbation[..., 1::2]) == 0
+    norms = perturbation.float().flatten(1).norm(p=2, dim=1)
+    assert torch.allclose(norms, torch.full_like(norms, 0.2))
+
+    feats = (
+        torch.rand(1, 8, 16, 16),
+        torch.rand(1, 16, 8, 8),
+        torch.rand(1, 32, 4, 4),
+    )
+    neck = FeatureAugmentNeck(
+        base_neck=dict(
+            type='FPN', in_channels=[8, 16, 32], out_channels=8,
+            num_outs=3),
+        levels=(0, ),
+        dgfe=dict(type='FeatureDGFE', upsample_steps=1),
+        api=dict(
+            type='AdversarialPerturbationInjection', guidance_mode='dgfe'))
+    neck.train()
+    neck.capture_api()
+    outs = neck(feats, batch_inputs=torch.rand(1, 3, 32, 32))
+    guided_api = neck.api_modules[0]
+    spatial_prob = neck.dgfe_modules['0'].last_aux['spatial_prob']
+    assert guided_api.captured is outs[0]
+    assert torch.equal(guided_api.spatial_guidance, spatial_prob.detach())
 
 
 def test_api_partial_forward_uses_captured_feature():
