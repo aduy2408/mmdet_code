@@ -215,6 +215,17 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
         return scaled
 
     @staticmethod
+    def replace_captured_feature(features, api):
+        adv_features = list(features)
+        for idx, feature in enumerate(adv_features):
+            if feature is api.captured:
+                adv_features[idx] = api(feature)
+                if isinstance(features, tuple):
+                    return tuple(adv_features)
+                return adv_features
+        raise RuntimeError('API partial forward could not find captured feature.')
+
+    @staticmethod
     def build_api_target(batch_inputs: Tensor,
                          batch_data_samples: SampleList,
                          feature: Tensor,
@@ -252,7 +263,9 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
     def api_augmented_losses(self, batch_inputs: Tensor,
                              batch_data_samples: SampleList,
                              clean_losses: dict,
-                             compute_losses):
+                             clean_features,
+                             compute_losses,
+                             compute_full_losses):
         api_modules = self.api_modules()
         if not api_modules:
             return clean_losses
@@ -277,7 +290,12 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
                 return clean_losses
 
             self.perturb_api()
-            adv_losses = compute_losses()
+            if getattr(api, 'forward_mode', 'partial') == 'full':
+                adv_losses = compute_full_losses()
+            else:
+                adv_features = self.replace_captured_feature(
+                    clean_features, api)
+                adv_losses = compute_losses(adv_features)
             weight = api.current_api_weight
             clean_losses.update(self.scale_loss_dict(adv_losses, weight,
                                                      'api_adv_'))

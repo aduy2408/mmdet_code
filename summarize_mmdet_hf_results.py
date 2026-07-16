@@ -15,6 +15,7 @@ from typing import Any
 
 MODELS = ("cascade_rcnn", "faster_rcnn", "fcos")
 VARIANTS = ("base",)
+EXPECTED_SEEDS = {"base": (42, 43, 44)}
 METRICS = (
     "coco/bbox_mAP",
     "coco/bbox_mAP_50",
@@ -36,7 +37,7 @@ ARTIFACT_HINTS = ("job_summary.json", "test_results", ".json", ".log")
 
 
 def is_metric_artifact(path: str) -> bool:
-    if path.endswith(".pth") or path.endswith(".pkl"):
+    if path.endswith((".pt", ".pth", ".pkl")):
         return False
     return any(model in path for model in MODELS) and any(hint in path for hint in ARTIFACT_HINTS)
 
@@ -170,20 +171,36 @@ def collect_candidates(out_dir: Path) -> tuple[list[dict[str, Any]], list[str]]:
     candidates = []
     for (repo_id, seed, model, variant, root_rel), files in groups.items():
         root = out_dir / "downloads" / repo_id.replace("/", "__") / root_rel
-        metrics: dict[str, float] = {}
+        test_groups: dict[Path, list[Path]] = defaultdict(list)
         for path in files:
-            metrics.update(parse_metrics(path))
+            relative = path.relative_to(root)
+            if "test_results" not in relative.parts:
+                continue
+            index = relative.parts.index("test_results")
+            if len(relative.parts) > index + 2:
+                test_groups[Path(*relative.parts[: index + 2])].append(path)
+        parsed_tests = []
+        for test_rel, test_files in test_groups.items():
+            test_metrics: dict[str, float] = {}
+            for path in test_files:
+                test_metrics.update(parse_metrics(path))
+            if test_metrics:
+                parsed_tests.append((test_rel, test_files, test_metrics))
+        latest_test = max(parsed_tests, key=lambda item: item[0].as_posix()) if parsed_tests else None
+        metrics = latest_test[2] if latest_test else {}
+        source = root / latest_test[0] if latest_test else root
+        metric_files = latest_test[1] if latest_test else files
         candidates.append(
             {
                 "repo": repo_id,
                 "seed": seed,
                 "model": model,
                 "variant": variant,
-                "root": root,
+                "root": source,
                 "has_job_summary": (root / "job_summary.json").exists(),
-                "has_test_results": any("test_results" in path.parts for path in files),
+                "has_test_results": latest_test is not None,
                 "metrics": metrics,
-                "timestamp": timestamp_for(root, files),
+                "timestamp": timestamp_for(source, metric_files),
             }
         )
 
@@ -216,7 +233,7 @@ def write_per_seed(out_dir: Path, selected: list[dict[str, Any]]) -> Path:
     path = out_dir / "mmdet_results_per_seed.csv"
     rows = []
     by_key = {(row["seed"], row["model"], row["variant"]): row for row in selected}
-    for seed in (42, 43, 44):
+    for seed in sorted({seed for seeds in EXPECTED_SEEDS.values() for seed in seeds}):
         for model in MODELS:
             for variant in VARIANTS:
                 row = by_key.get((seed, model, variant))
@@ -248,9 +265,9 @@ def write_summary(out_dir: Path, selected: list[dict[str, Any]], notes: list[str
                         "metric": metric,
                         "n": len(values),
                         "mean": statistics.mean(values) if values else "",
-                        "std": statistics.stdev(values) if len(values) > 1 else (0.0 if len(values) == 1 else ""),
+                        "std": statistics.stdev(values) if len(values) > 1 else "",
                         "seeds": " ".join(str(row["seed"]) for row in matching if metric in row["metrics"]),
-                        "status": "ok" if len(values) == 3 else "missing",
+                        "status": "ok" if len(values) == len(EXPECTED_SEEDS[variant]) else "missing",
                         "gflops": COMPLEXITY[model]["gflops"],
                         "params_m": COMPLEXITY[model]["params_m"],
                         "complexity_input": COMPLEXITY[model]["input_shape"],
@@ -277,34 +294,43 @@ def write_summary(out_dir: Path, selected: list[dict[str, Any]], notes: list[str
         writer.writerows(rows)
 
     lines = ["# MMDetection HF Results", "", "## mAP / AP50", ""]
-    lines.append("| model | mAP mean | mAP std | AP50 mean | AP50 std | GFLOPs | Params(M) | FLOPs input | seeds |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---|---|")
+    lines.append("| model | variant | n | mAP mean | mAP std | AP50 mean | AP50 std | seeds |")
+    lines.append("|---|---|---:|---:|---:|---:|---:|---|")
     for model in MODELS:
-        matching = [row for row in selected if row["model"] == model and row["variant"] == "base"]
-        map_values = [row["metrics"]["coco/bbox_mAP"] for row in matching if "coco/bbox_mAP" in row["metrics"]]
-        ap50_values = [row["metrics"]["coco/bbox_mAP_50"] for row in matching if "coco/bbox_mAP_50" in row["metrics"]]
-        seeds = " ".join(str(row["seed"]) for row in matching if "coco/bbox_mAP" in row["metrics"])
-        map_mean = statistics.mean(map_values) if map_values else None
-        map_std = statistics.stdev(map_values) if len(map_values) > 1 else (0.0 if map_values else None)
-        ap50_mean = statistics.mean(ap50_values) if ap50_values else None
-        ap50_std = statistics.stdev(ap50_values) if len(ap50_values) > 1 else (0.0 if ap50_values else None)
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    model,
-                    f"{map_mean:.4f}" if map_mean is not None else "",
-                    f"{map_std:.4f}" if map_std is not None else "",
-                    f"{ap50_mean:.4f}" if ap50_mean is not None else "",
-                    f"{ap50_std:.4f}" if ap50_std is not None else "",
-                    f"{COMPLEXITY[model]['gflops']:.3f}",
-                    f"{COMPLEXITY[model]['params_m']:.3f}",
-                    COMPLEXITY[model]["input_shape"],
-                    seeds,
-                ]
+        for variant in VARIANTS:
+            matching = [row for row in selected if row["model"] == model and row["variant"] == variant]
+            map_values = [row["metrics"]["coco/bbox_mAP"] for row in matching if "coco/bbox_mAP" in row["metrics"]]
+            ap50_values = [row["metrics"]["coco/bbox_mAP_50"] for row in matching if "coco/bbox_mAP_50" in row["metrics"]]
+            seeds = " ".join(str(row["seed"]) for row in matching if "coco/bbox_mAP" in row["metrics"])
+            map_std = statistics.stdev(map_values) if len(map_values) > 1 else None
+            ap50_std = statistics.stdev(ap50_values) if len(ap50_values) > 1 else None
+            lines.append(
+                f"| {model} | {variant} | {len(map_values)} | "
+                f"{statistics.mean(map_values):.4f} | " if map_values else f"| {model} | {variant} | 0 |  | "
             )
-            + " |"
-        )
+            lines[-1] += (
+                f"{map_std:.4f}" if map_std is not None else "—"
+            ) + " | " + (
+                f"{statistics.mean(ap50_values):.4f}" if ap50_values else ""
+            ) + " | " + (
+                f"{ap50_std:.4f}" if ap50_std is not None else "—"
+            ) + f" | {seeds} |"
+
+    if "base" in VARIANTS and "dgfe_api" in VARIANTS:
+        lines.extend(["", "## Seed 44: DGFE API vs Base", ""])
+        lines.append("| model | base mAP | dgfe_api mAP | delta |")
+        lines.append("|---|---:|---:|---:|")
+        keyed = {(row["seed"], row["model"], row["variant"]): row for row in selected}
+        for model in MODELS:
+            base = keyed.get((44, model, "base"))
+            dgfe = keyed.get((44, model, "dgfe_api"))
+            base_map = base["metrics"].get("coco/bbox_mAP") if base else None
+            dgfe_map = dgfe["metrics"].get("coco/bbox_mAP") if dgfe else None
+            delta = dgfe_map - base_map if base_map is not None and dgfe_map is not None else None
+            lines.append(
+                f"| {model} | {base_map:.4f} | {dgfe_map:.4f} | {delta:+.4f} |"
+                if delta is not None else f"| {model} |  |  |  |"
+            )
     lines.extend(["", "## Full Metrics", ""])
     lines.append("| model | variant | metric | n | mean | std | seeds | status |")
     lines.append("|---|---|---|---:|---:|---:|---|---|")
@@ -328,11 +354,19 @@ def write_summary(out_dir: Path, selected: list[dict[str, Any]], notes: list[str
 
 
 def main() -> None:
+    global REPOS, VARIANTS, EXPECTED_SEEDS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out-dir", default="hf_results")
     parser.add_argument("--hf-token", default=None)
+    parser.add_argument("--repo-id", default=None)
     parser.add_argument("--skip-download", action="store_true")
     args = parser.parse_args()
+
+    if args.repo_id:
+        REPOS = ((args.repo_id, None),)
+    if args.repo_id == "duyle2408/varroa_mmdet_runs_newmodels":
+        VARIANTS = ("base", "dgfe_api")
+        EXPECTED_SEEDS = {"base": (44,), "dgfe_api": (42, 43, 44)}
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

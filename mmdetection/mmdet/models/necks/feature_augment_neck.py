@@ -119,12 +119,16 @@ class AdversarialPerturbationInjection(BaseModule):
                  rho: float = 0.02,
                  api_weight: float = 0.25,
                  target_mode: str = 'foreground',
+                 forward_mode: str = 'partial',
                  eps: float = 1e-6,
                  init_cfg: OptConfigType = None) -> None:
         super().__init__(init_cfg=init_cfg)
         self.rho = max(float(rho), 0.0)
         self.api_weight = max(float(api_weight), 0.0)
         self.target_mode = str(target_mode)
+        if forward_mode not in {'partial', 'full'}:
+            raise ValueError('forward_mode must be "partial" or "full".')
+        self.forward_mode = forward_mode
         self.eps = max(float(eps), 1e-12)
         self.aux_head = nn.Conv2d(channels, 1, 1)
         self.mode = 'off'

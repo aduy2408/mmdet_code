@@ -1,12 +1,47 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import pytest
 import torch
+from mmengine.structures import InstanceData
 from torch.nn.modules.batchnorm import _BatchNorm
 
+from mmdet.models.detectors.base import BaseDetector
 from mmdet.models.necks import (FPG, FPN, FPN_CARAFE, NASFCOS_FPN, NASFPN, SSH,
                                 YOLOXPAFPN, ChannelMapper, DilatedEncoder,
-                                DyHead, FeatureAugmentNeck, SSDNeck,
+                                DyHead, FeatureAugmentNeck,
+                                AdversarialPerturbationInjection, SSDNeck,
                                 YOLOV3Neck)
+from mmdet.structures import DetDataSample
+
+
+class _APIOnlyDetector(BaseDetector):
+
+    def __init__(self, api):
+        super().__init__()
+        self.neck = _APIOnlyNeck(api)
+
+    def loss(self, batch_inputs, batch_data_samples):
+        raise NotImplementedError
+
+    def predict(self, batch_inputs, batch_data_samples):
+        raise NotImplementedError
+
+    def _forward(self, batch_inputs, batch_data_samples=None):
+        raise NotImplementedError
+
+    def extract_feat(self, batch_inputs):
+        raise NotImplementedError
+
+
+class _APIOnlyNeck:
+
+    def __init__(self, api):
+        self.api_modules = [api]
+
+    def clear_api_state(self):
+        self.api_modules[0].clear_state()
+
+    def perturb_api(self):
+        self.api_modules[0].perturb()
 
 
 def test_fpn():
@@ -104,7 +139,9 @@ def test_feature_augment_neck():
         out_channels=8,
         levels=(0, ),
         dgfe=dict(type='FeatureDGFE'),
-        api=dict(type='AdversarialPerturbationInjection'))
+        api=dict(type='AdversarialPerturbationInjection',
+                 forward_mode='partial'))
+    assert neck.api_modules[0].forward_mode == 'partial'
 
     neck.eval()
     eval_outs = neck(feats, batch_inputs=imgs)
@@ -123,6 +160,38 @@ def test_feature_augment_neck():
     neck.perturb_api()
     perturbed_outs = neck(feats, batch_inputs=imgs)
     assert perturbed_outs[0].shape == outs[0].shape
+
+
+def test_api_partial_forward_uses_captured_feature():
+    api = AdversarialPerturbationInjection(
+        channels=8, rho=0.1, api_weight=1.0, forward_mode='partial')
+    api.train()
+    detector = _APIOnlyDetector(api)
+    detector.train()
+
+    feature = torch.ones(1, 8, 4, 4, requires_grad=True)
+    other_feature = torch.zeros(1, 8, 2, 2, requires_grad=True)
+    clean_features = (feature, other_feature)
+    api.captured = feature
+    clean_losses = dict(loss_cls=feature.sum())
+    batch_inputs = torch.zeros(1, 3, 16, 16)
+    data_sample = DetDataSample()
+    data_sample.gt_instances = InstanceData(bboxes=torch.empty(0, 4))
+
+    def compute_losses(adv_features):
+        assert adv_features[0] is not feature
+        assert adv_features[1] is other_feature
+        return dict(loss_cls=adv_features[0].sum())
+
+    def compute_full_losses():
+        raise AssertionError('partial forward should not re-run full losses')
+
+    losses = detector.api_augmented_losses(
+        batch_inputs, [data_sample], clean_losses, clean_features,
+        compute_losses, compute_full_losses)
+
+    assert 'api_adv_loss_cls' in losses
+    assert 'loss_api_aux' in losses
 
     # Tests for fpn with no extra convs (pooling is used instead)
     fpn_model = FPN(

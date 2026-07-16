@@ -1,0 +1,37 @@
+model,variant,metric,n,mean,std,seeds,status,gflops,params_m,complexity_input
+cascade_rcnn,base,coco/bbox_mAP,1,0.32,,44,ok,87.898,69.152,640x384
+cascade_rcnn,base,coco/bbox_mAP_50,1,0.888,,44,ok,87.898,69.152,640x384
+cascade_rcnn,base,coco/bbox_mAP_75,1,0.103,,44,ok,87.898,69.152,640x384
+cascade_rcnn,base,coco/bbox_mAP_s,1,0.324,,44,ok,87.898,69.152,640x384
+cascade_rcnn,base,coco/bbox_mAP_m,1,0.322,,44,ok,87.898,69.152,640x384
+cascade_rcnn,base,coco/bbox_mAP_l,1,-1.0,,44,ok,87.898,69.152,640x384
+cascade_rcnn,dgfe_api,coco/bbox_mAP,3,0.35,0.02424871130596427,42 43 44,ok,87.898,69.152,640x384
+cascade_rcnn,dgfe_api,coco/bbox_mAP_50,3,0.9073333333333333,0.01171893055416464,42 43 44,ok,87.898,69.152,640x384
+cascade_rcnn,dgfe_api,coco/bbox_mAP_75,3,0.14266666666666666,0.04404921490030592,42 43 44,ok,87.898,69.152,640x384
+cascade_rcnn,dgfe_api,coco/bbox_mAP_s,3,0.3456666666666667,0.016258331197676248,42 43 44,ok,87.898,69.152,640x384
+cascade_rcnn,dgfe_api,coco/bbox_mAP_m,3,0.361,0.03269556544854363,42 43 44,ok,87.898,69.152,640x384
+cascade_rcnn,dgfe_api,coco/bbox_mAP_l,3,-1.0,0.0,42 43 44,ok,87.898,69.152,640x384
+faster_rcnn,base,coco/bbox_mAP,1,0.332,,44,ok,60.099,41.348,640x384
+faster_rcnn,base,coco/bbox_mAP_50,1,0.906,,44,ok,60.099,41.348,640x384
+faster_rcnn,base,coco/bbox_mAP_75,1,0.115,,44,ok,60.099,41.348,640x384
+faster_rcnn,base,coco/bbox_mAP_s,1,0.334,,44,ok,60.099,41.348,640x384
+faster_rcnn,base,coco/bbox_mAP_m,1,0.339,,44,ok,60.099,41.348,640x384
+faster_rcnn,base,coco/bbox_mAP_l,1,-1.0,,44,ok,60.099,41.348,640x384
+faster_rcnn,dgfe_api,coco/bbox_mAP,3,0.353,0.019974984355438166,42 43 44,ok,60.099,41.348,640x384
+faster_rcnn,dgfe_api,coco/bbox_mAP_50,3,0.9026666666666667,0.009451631252505225,42 43 44,ok,60.099,41.348,640x384
+faster_rcnn,dgfe_api,coco/bbox_mAP_75,3,0.158,0.03439476704383968,42 43 44,ok,60.099,41.348,640x384
+faster_rcnn,dgfe_api,coco/bbox_mAP_s,3,0.35,0.01708800749063505,42 43 44,ok,60.099,41.348,640x384
+faster_rcnn,dgfe_api,coco/bbox_mAP_m,3,0.3646666666666667,0.025324559884296764,42 43 44,ok,60.099,41.348,640x384
+faster_rcnn,dgfe_api,coco/bbox_mAP_l,3,-1.0,0.0,42 43 44,ok,60.099,41.348,640x384
+fcos,base,coco/bbox_mAP,1,0.3,,44,ok,47.148,32.113,640x384
+fcos,base,coco/bbox_mAP_50,1,0.883,,44,ok,47.148,32.113,640x384
+fcos,base,coco/bbox_mAP_75,1,0.081,,44,ok,47.148,32.113,640x384
+fcos,base,coco/bbox_mAP_s,1,0.283,,44,ok,47.148,32.113,640x384
+fcos,base,coco/bbox_mAP_m,1,0.333,,44,ok,47.148,32.113,640x384
+fcos,base,coco/bbox_mAP_l,1,-1.0,,44,ok,47.148,32.113,640x384
+fcos,dgfe_api,coco/bbox_mAP,3,0.316,0.0194679223339318,42 43 44,ok,47.148,32.113,640x384
+fcos,dgfe_api,coco/bbox_mAP_50,3,0.8846666666666667,0.018036999011291594,42 43 44,ok,47.148,32.113,640x384
+fcos,dgfe_api,coco/bbox_mAP_75,3,0.113,0.0138924439894498,42 43 44,ok,47.148,32.113,640x384
+fcos,dgfe_api,coco/bbox_mAP_s,3,0.3,0.01558845726811991,42 43 44,ok,47.148,32.113,640x384
+fcos,dgfe_api,coco/bbox_mAP_m,3,0.34933333333333333,0.028112867753634332,42 43 44,ok,47.148,32.113,640x384
+fcos,dgfe_api,coco/bbox_mAP_l,3,-1.0,0.0,42 43 44,ok,47.148,32.113,640x384

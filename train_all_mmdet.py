@@ -353,6 +353,7 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
             api_weight=args.api_weight,
             rho=args.api_rho,
             target_mode=args.api_target_mode,
+            forward_mode=args.api_forward_mode,
         ),
     )
 
@@ -698,6 +699,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--api-weight", type=float, default=0.01)
     parser.add_argument("--api-rho", type=float, default=0.001)
     parser.add_argument("--api-target-mode", default="foreground")
+    parser.add_argument(
+        "--api-forward-mode",
+        default="partial",
+        choices=("partial", "full"),
+        help="Use partial adversarial forward from captured features, or full re-forward for compatibility.",
+    )
     parser.add_argument("--dgfe-levels", type=int, nargs="+", default=[0])
     parser.add_argument("--dgfe-reduction", type=int, default=8)
     parser.add_argument("--dgfe-threshold", type=float, default=0.0156862)

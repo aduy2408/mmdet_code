@@ -163,6 +163,9 @@ class TwoStageDetector(BaseDetector):
         if self.has_api_loss():
             losses = self.api_augmented_losses(
                 batch_inputs, batch_data_samples, losses,
+                x,
+                lambda x_adv: self.loss_from_features(
+                    x_adv, batch_data_samples),
                 lambda: self.loss_from_features(
                     self.extract_feat(batch_inputs), batch_data_samples))
         return losses

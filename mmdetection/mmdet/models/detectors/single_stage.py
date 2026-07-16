@@ -81,6 +81,9 @@ class SingleStageDetector(BaseDetector):
         if self.has_api_loss():
             losses = self.api_augmented_losses(
                 batch_inputs, batch_data_samples, losses,
+                x,
+                lambda x_adv: self.bbox_head.loss(
+                    x_adv, batch_data_samples),
                 lambda: self.bbox_head.loss(
                     self.extract_feat(batch_inputs), batch_data_samples))
         return losses
