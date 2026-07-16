@@ -333,6 +333,15 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
         out_channels = base_neck[-1].get("out_channels", base_neck[0].get("out_channels", 256))
     else:
         out_channels = base_neck.get("out_channels", 256)
+    api_cfg = None
+    if args.api_forward_mode != "none":
+        api_cfg = dict(
+            type="AdversarialPerturbationInjection",
+            api_weight=args.api_weight,
+            rho=args.api_rho,
+            target_mode=args.api_target_mode,
+            forward_mode=args.api_forward_mode,
+        )
     model.neck = dict(
         type="FeatureAugmentNeck",
         base_neck=base_neck,
@@ -348,13 +357,7 @@ def wrap_dgfe_api_neck(model: Any, args: argparse.Namespace) -> None:
             recon_ratio=args.dgfe_recon_ratio,
             upsample_steps=args.dgfe_upsample_steps,
         ),
-        api=dict(
-            type="AdversarialPerturbationInjection",
-            api_weight=args.api_weight,
-            rho=args.api_rho,
-            target_mode=args.api_target_mode,
-            forward_mode=args.api_forward_mode,
-        ),
+        api=api_cfg,
     )
 
 
@@ -702,8 +705,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--api-forward-mode",
         default="partial",
-        choices=("partial", "full"),
-        help="Use partial adversarial forward from captured features, or full re-forward for compatibility.",
+        choices=("none", "partial", "full"),
+        help="Use no API, partial adversarial forward from captured features, or full re-forward for compatibility.",
     )
     parser.add_argument("--dgfe-levels", type=int, nargs="+", default=[0])
     parser.add_argument("--dgfe-reduction", type=int, default=8)
