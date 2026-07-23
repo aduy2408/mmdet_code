@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
 import subprocess
@@ -307,6 +308,41 @@ def run(command: list[str]) -> None:
     subprocess.run(command, cwd=mmdet_root(), check=True)
 
 
+def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
+    if args.no_hf_upload:
+        return
+    token = args.hf_token or os.environ.get("HF_TOKEN")
+    if not token:
+        raise ValueError(
+            "Hugging Face upload requires --hf-token or HF_TOKEN; "
+            "pass --no-hf-upload to skip."
+        )
+
+    try:
+        from huggingface_hub import HfApi
+    except ImportError as exc:
+        raise ImportError(
+            "Hugging Face upload requires `huggingface_hub`; "
+            "install it or pass --no-hf-upload."
+        ) from exc
+
+    work_dir = resolve_path(args.work_dir) / model_name
+    api = HfApi(token=token)
+    api.create_repo(
+        repo_id=args.hf_repo_id,
+        repo_type=args.hf_repo_type,
+        private=False,
+        exist_ok=True,
+    )
+    print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}/{model_name}")
+    api.upload_folder(
+        folder_path=str(work_dir),
+        path_in_repo=model_name,
+        repo_id=args.hf_repo_id,
+        repo_type=args.hf_repo_type,
+    )
+
+
 def run_job(
     model_name: str,
     args: argparse.Namespace,
@@ -340,6 +376,7 @@ def run_job(
             str(work_dir / "test_results" / "predictions.pkl"),
         ]
     )
+    upload_work_dir_to_hf(model_name, args)
 
 
 def parse_args() -> argparse.Namespace:
@@ -367,6 +404,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-only", action="store_true")
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument("--machine-index", type=int, default=0)
+    parser.add_argument("--hf-repo-id", default="duyle2408/levir_ship_mmdet_runs")
+    parser.add_argument("--hf-repo-type", default="dataset")
+    parser.add_argument(
+        "--hf-token",
+        default="",
+        help="Hugging Face token. Defaults to HF_TOKEN from the environment.",
+    )
+    parser.add_argument(
+        "--no-hf-upload",
+        action="store_true",
+        help="Skip uploading each completed model to Hugging Face.",
+    )
     return parser.parse_args()
 
 

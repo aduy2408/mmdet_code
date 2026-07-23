@@ -129,3 +129,4 @@ data/
 hf_runs/
 LevirShipData/
 varroa*/
+upload_data*.py
