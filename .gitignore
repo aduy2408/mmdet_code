@@ -125,3 +125,7 @@ work_dirs/
 data/
 .venv*/
 # mmdetection/
+*understand*/
+hf_runs/
+LevirShipData/
+varroa*/
