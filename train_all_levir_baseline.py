@@ -305,7 +305,11 @@ def find_checkpoint(work_dir: Path) -> Path:
 
 def run(command: list[str]) -> None:
     print("RUN", " ".join(map(str, command)))
-    subprocess.run(command, cwd=mmdet_root(), check=True)
+    env = os.environ.copy()
+    # MMEngine checkpoints contain HistoryBuffer objects. PyTorch 2.6+ defaults
+    # torch.load() to weights_only=True, which rejects these trusted objects.
+    env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    subprocess.run(command, cwd=mmdet_root(), env=env, check=True)
 
 
 def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
