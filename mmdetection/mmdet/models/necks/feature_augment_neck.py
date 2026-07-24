@@ -10,7 +10,230 @@ from mmengine.model import BaseModule
 from torch import Tensor
 
 from mmdet.registry import MODELS
+from mmdet.structures.bbox import get_box_tensor
 from mmdet.utils import ConfigType, OptConfigType
+
+
+class MaskedCenterConv2d(nn.Conv2d):
+    """A 3x3 convolution that cannot observe the predicted center."""
+
+    def __init__(self, channels: int) -> None:
+        super().__init__(channels, channels, 3, padding=1)
+        mask = torch.ones_like(self.weight)
+        mask[:, :, 1, 1] = 0
+        self.register_buffer('mask', mask)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return F.conv2d(x, self.weight * self.mask, self.bias, self.stride,
+                        self.padding, self.dilation, self.groups)
+
+
+@MODELS.register_module()
+class DualIrreducibilityHIT(BaseModule):
+    """Locate jointly irreducible residuals and splat them toward objects."""
+
+    def __init__(self,
+                 channels: int,
+                 stride: int = 8,
+                 reduction: int = 8,
+                 topk: int = 4,
+                 max_offset: float = 8.0,
+                 sigma_min: float = 0.5,
+                 sigma_max: float = 1.5,
+                 alpha_init: float = 1e-3,
+                 alpha_max: float = 1.0,
+                 hard_clip: float = 5.0,
+                 loss_recon_spatial_weight: float = 0.1,
+                 loss_recon_channel_weight: float = 0.1,
+                 loss_offset_weight: float = 1.0,
+                 eps: float = 1e-6,
+                 init_cfg: OptConfigType = None) -> None:
+        super().__init__(init_cfg=init_cfg)
+        hidden = max(channels // max(int(reduction), 1), 1)
+        self.channels = int(channels)
+        self.stride = int(stride)
+        self.topk = max(int(topk), 1)
+        self.max_offset = float(max_offset)
+        self.sigma_min = float(sigma_min)
+        self.sigma_max = float(sigma_max)
+        self.alpha_max = max(float(alpha_max), 0.0)
+        self.hard_clip = float(hard_clip)
+        self.loss_recon_spatial_weight = float(
+            loss_recon_spatial_weight)
+        self.loss_recon_channel_weight = float(
+            loss_recon_channel_weight)
+        self.loss_offset_weight = float(loss_offset_weight)
+        self.eps = float(eps)
+
+        self.spatial_reconstruct = MaskedCenterConv2d(channels)
+        self.channel_reconstruct = nn.Sequential(
+            nn.Conv2d(channels, hidden, 1),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(hidden, channels, 1),
+        )
+        self.residual_fuse = nn.Sequential(
+            nn.Conv2d(2 * channels, channels, 1),
+            nn.SiLU(inplace=True),
+        )
+        self.offset_head = nn.Conv2d(channels + 1, 3, 3, padding=1)
+        p = max(min(float(alpha_init) / max(self.alpha_max, 1e-12),
+                    1.0 - 1e-6), 1e-6)
+        self.alpha_logit = nn.Parameter(torch.logit(torch.tensor(p)))
+        self.last_aux: dict[str, Tensor] | None = None
+
+    @property
+    def alpha(self) -> Tensor:
+        return torch.sigmoid(self.alpha_logit) * self.alpha_max
+
+    def hard_map(self, spatial_residual: Tensor,
+                 channel_residual: Tensor) -> Tensor:
+        spatial_energy = spatial_residual.abs().mean(dim=1, keepdim=True)
+        channel_energy = channel_residual.abs().mean(dim=1, keepdim=True)
+        return (2 * spatial_energy * channel_energy /
+                (spatial_energy + channel_energy + self.eps))
+
+    def _gaussian_splat(self, source: Tensor, offsets: Tensor,
+                        sigma: Tensor) -> Tensor:
+        batch, channels, height, width = source.shape
+        dtype, device = source.dtype, source.device
+        yy, xx = torch.meshgrid(
+            torch.arange(height, device=device, dtype=dtype),
+            torch.arange(width, device=device, dtype=dtype),
+            indexing='ij')
+        dest_x = xx.reshape(1, -1) + offsets[:, 0].reshape(batch, -1)
+        dest_y = yy.reshape(1, -1) + offsets[:, 1].reshape(batch, -1)
+        base_x, base_y = dest_x.floor(), dest_y.floor()
+        sigma_flat = sigma.reshape(batch, -1).clamp(min=self.eps)
+
+        indices, weights = [], []
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                target_x = base_x + dx
+                target_y = base_y + dy
+                valid = ((target_x >= 0) & (target_x < width) &
+                         (target_y >= 0) & (target_y < height))
+                distance_sq = ((target_x - dest_x).square() +
+                               (target_y - dest_y).square())
+                weight = torch.exp(
+                    -0.5 * distance_sq / sigma_flat.square())
+                weights.append(weight * valid)
+                indices.append(
+                    (target_y.clamp(0, height - 1) * width +
+                     target_x.clamp(0, width - 1)).long())
+
+        weight_stack = torch.stack(weights, dim=1)
+        weight_stack = weight_stack / weight_stack.sum(
+            dim=1, keepdim=True).clamp(min=self.eps)
+        source_flat = source.reshape(batch, channels, -1)
+        transported = source.new_zeros(batch, channels, height * width)
+        for index, weight in zip(indices, weight_stack.unbind(dim=1)):
+            transported.scatter_add_(
+                2, index.unsqueeze(1).expand(-1, channels, -1),
+                source_flat * weight.unsqueeze(1))
+        return transported.reshape(batch, channels, height, width)
+
+    def forward(self, x: Tensor) -> Tensor:
+        spatial_reconstruction = self.spatial_reconstruct(x)
+        channel_reconstruction = self.channel_reconstruct(x)
+        spatial_residual = x - spatial_reconstruction
+        channel_residual = x - channel_reconstruction
+        hard_raw = self.hard_map(spatial_residual, channel_residual)
+        hard = hard_raw / hard_raw.mean(
+            dim=(2, 3), keepdim=True).detach().clamp(min=self.eps)
+        hard = hard.clamp(max=self.hard_clip)
+
+        offset_params = self.offset_head(torch.cat([x, hard], dim=1))
+        offsets = torch.tanh(offset_params[:, :2]) * self.max_offset
+        sigma = self.sigma_min + torch.sigmoid(offset_params[:, 2:3]) * (
+            self.sigma_max - self.sigma_min)
+        residual = self.residual_fuse(
+            torch.cat([spatial_residual, channel_residual], dim=1))
+        transported = self._gaussian_splat(residual * hard, offsets, sigma)
+        alpha = self.alpha.to(device=x.device, dtype=x.dtype)
+
+        self.last_aux = dict(
+            feature=x,
+            spatial_reconstruction=spatial_reconstruction,
+            channel_reconstruction=channel_reconstruction,
+            hard_raw=hard_raw,
+            hard=hard,
+            offsets=offsets,
+            sigma=sigma,
+            transported=transported,
+        ) if self.training else None
+        return x + alpha * transported
+
+    def _offset_targets(self, batch_data_samples) -> tuple[Tensor, Tensor]:
+        assert self.last_aux is not None
+        hard = self.last_aux['hard_raw'].detach()
+        offsets = self.last_aux['offsets']
+        _, _, height, width = hard.shape
+        predictions, targets = [], []
+
+        yy, xx = torch.meshgrid(
+            torch.arange(height, device=hard.device, dtype=hard.dtype),
+            torch.arange(width, device=hard.device, dtype=hard.dtype),
+            indexing='ij')
+        cell_x, cell_y = xx + 0.5, yy + 0.5
+        flat_x, flat_y = cell_x.flatten(), cell_y.flatten()
+
+        for batch_index, data_sample in enumerate(batch_data_samples):
+            gt_instances = data_sample.gt_instances
+            bboxes = get_box_tensor(gt_instances.bboxes).to(
+                device=hard.device, dtype=hard.dtype)
+            assignments: dict[int, tuple[Tensor, Tensor]] = {}
+            for box in bboxes:
+                box_cells = box / self.stride
+                x1, y1, x2, y2 = box_cells
+                inside = ((flat_x >= x1) & (flat_x <= x2) &
+                          (flat_y >= y1) & (flat_y <= y2))
+                candidates = inside.nonzero(as_tuple=False).flatten()
+                center = torch.stack(((x1 + x2) / 2, (y1 + y2) / 2))
+                if candidates.numel() == 0:
+                    distance = ((flat_x - center[0]).square() +
+                                (flat_y - center[1]).square())
+                    candidates = distance.argmin().reshape(1)
+                scores = hard[batch_index, 0].flatten()[candidates]
+                count = min(self.topk, candidates.numel())
+                selected = candidates[scores.topk(count).indices]
+                area = (x2 - x1).clamp(min=0) * (y2 - y1).clamp(min=0)
+                for index in selected:
+                    key = int(index)
+                    target = center - torch.stack(
+                        (flat_x[index], flat_y[index]))
+                    if key not in assignments or area < assignments[key][0]:
+                        assignments[key] = (area, target)
+
+            for index, (_, target) in assignments.items():
+                y, x_coord = divmod(index, width)
+                predictions.append(offsets[batch_index, :, y, x_coord])
+                targets.append(target)
+
+        if not predictions:
+            return offsets.new_empty((0, 2)), offsets.new_empty((0, 2))
+        return torch.stack(predictions), torch.stack(targets)
+
+    def auxiliary_losses(self, batch_data_samples) -> dict[str, Tensor]:
+        if self.last_aux is None:
+            return {}
+        feature = self.last_aux['feature'].detach()
+        loss_spatial = F.l1_loss(
+            self.last_aux['spatial_reconstruction'], feature)
+        loss_channel = F.l1_loss(
+            self.last_aux['channel_reconstruction'], feature)
+        prediction, target = self._offset_targets(batch_data_samples)
+        if prediction.numel():
+            loss_offset = F.smooth_l1_loss(
+                prediction, target, beta=1.0, reduction='mean')
+        else:
+            loss_offset = self.last_aux['offsets'].sum() * 0
+        return dict(
+            loss_hit_recon_spatial=(
+                loss_spatial * self.loss_recon_spatial_weight),
+            loss_hit_recon_channel=(
+                loss_channel * self.loss_recon_channel_weight),
+            loss_hit_offset=loss_offset * self.loss_offset_weight,
+        )
 
 
 class UpBlock(nn.Module):
@@ -204,13 +427,15 @@ class FeatureAugmentNeck(BaseModule):
                  out_channels: int | Sequence[int] | None = None,
                  dgfe: OptConfigType = None,
                  api: OptConfigType = None,
-        init_cfg: OptConfigType = None) -> None:
+                 hit: OptConfigType = None,
+                 init_cfg: OptConfigType = None) -> None:
         super().__init__(init_cfg=init_cfg)
         self.base_neck = self._build_base_neck(base_neck)
         self.levels = tuple(int(level) for level in levels)
         channels = self._resolve_channels(out_channels)
         self.dgfe_modules = nn.ModuleDict()
         self.api_modules_by_level = nn.ModuleDict()
+        self.hit_modules = nn.ModuleDict()
 
         for level in self.levels:
             level_channels = (
@@ -225,6 +450,11 @@ class FeatureAugmentNeck(BaseModule):
                 cfg.setdefault('type', 'AdversarialPerturbationInjection')
                 cfg.setdefault('channels', level_channels)
                 self.api_modules_by_level[str(level)] = MODELS.build(cfg)
+            if hit is not None:
+                cfg = dict(hit)
+                cfg.setdefault('type', 'DualIrreducibilityHIT')
+                cfg.setdefault('channels', level_channels)
+                self.hit_modules[str(level)] = MODELS.build(cfg)
 
         self.out_channels = getattr(self.base_neck, 'out_channels',
                                     out_channels)
@@ -264,6 +494,15 @@ class FeatureAugmentNeck(BaseModule):
         for module in self.api_modules[:1]:
             module.perturb()
 
+    def auxiliary_losses(self, batch_data_samples) -> dict[str, Tensor]:
+        losses = {}
+        for level, module in self.hit_modules.items():
+            for name, loss in module.auxiliary_losses(
+                    batch_data_samples).items():
+                key = name if len(self.hit_modules) == 1 else f'{name}_p{level}'
+                losses[key] = loss
+        return losses
+
     def forward(self,
                 inputs: tuple[Tensor, ...] | list[Tensor],
                 batch_inputs: Tensor | None = None) -> tuple[Tensor, ...]:
@@ -276,4 +515,6 @@ class FeatureAugmentNeck(BaseModule):
                 outs[level] = self.dgfe_modules[key](outs[level], batch_inputs)
             if key in self.api_modules_by_level:
                 outs[level] = self.api_modules_by_level[key](outs[level])
+            if key in self.hit_modules:
+                outs[level] = self.hit_modules[key](outs[level])
         return tuple(outs)

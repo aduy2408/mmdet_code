@@ -163,6 +163,13 @@ class BaseDetector(BaseModel, metaclass=ABCMeta):
             return self.neck(feats, batch_inputs=batch_inputs)
         return self.neck(feats)
 
+    def neck_auxiliary_losses(self,
+                              batch_data_samples: SampleList) -> dict:
+        """Collect optional train-time losses exposed by a neck."""
+        if not self.with_neck or not hasattr(self.neck, 'auxiliary_losses'):
+            return {}
+        return self.neck.auxiliary_losses(batch_data_samples)
+
     def api_modules(self) -> list:
         if not self.with_neck:
             return []
