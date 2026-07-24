@@ -1,6 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import annotations
 
+import math
 from typing import Sequence
 
 import torch
@@ -38,10 +39,12 @@ class DualIrreducibilityHIT(BaseModule):
                  reduction: int = 8,
                  topk: int = 4,
                  max_offset: float = 8.0,
-                 sigma_min: float = 0.5,
-                 sigma_max: float = 1.5,
-                 alpha_init: float = 1e-3,
-                 alpha_max: float = 1.0,
+                 source_topq: float = 0.01,
+                 fixed_sigma: float = 1.0,
+                 detach_offset_input: bool = True,
+                 offset_target_margin: int = 1,
+                 transport_enabled: bool = True,
+                 background_recon_only: bool = True,
                  hard_clip: float = 5.0,
                  loss_recon_spatial_weight: float = 0.1,
                  loss_recon_channel_weight: float = 0.1,
@@ -54,9 +57,14 @@ class DualIrreducibilityHIT(BaseModule):
         self.stride = int(stride)
         self.topk = max(int(topk), 1)
         self.max_offset = float(max_offset)
-        self.sigma_min = float(sigma_min)
-        self.sigma_max = float(sigma_max)
-        self.alpha_max = max(float(alpha_max), 0.0)
+        if not 0 < source_topq <= 1:
+            raise ValueError('source_topq must be in (0, 1].')
+        self.source_topq = float(source_topq)
+        self.fixed_sigma = float(fixed_sigma)
+        self.detach_offset_input = bool(detach_offset_input)
+        self.offset_target_margin = max(int(offset_target_margin), 0)
+        self.transport_enabled = bool(transport_enabled)
+        self.background_recon_only = bool(background_recon_only)
         self.hard_clip = float(hard_clip)
         self.loss_recon_spatial_weight = float(
             loss_recon_spatial_weight)
@@ -75,15 +83,13 @@ class DualIrreducibilityHIT(BaseModule):
             nn.Conv2d(2 * channels, channels, 1),
             nn.SiLU(inplace=True),
         )
-        self.offset_head = nn.Conv2d(channels + 1, 3, 3, padding=1)
-        p = max(min(float(alpha_init) / max(self.alpha_max, 1e-12),
-                    1.0 - 1e-6), 1e-6)
-        self.alpha_logit = nn.Parameter(torch.logit(torch.tensor(p)))
+        self.offset_head = nn.Conv2d(channels + 1, 2, 3, padding=1)
+        nn.init.zeros_(self.offset_head.weight)
+        nn.init.zeros_(self.offset_head.bias)
+        self.transport_projection = nn.Conv2d(channels, channels, 1)
+        nn.init.zeros_(self.transport_projection.weight)
+        nn.init.zeros_(self.transport_projection.bias)
         self.last_aux: dict[str, Tensor] | None = None
-
-    @property
-    def alpha(self) -> Tensor:
-        return torch.sigmoid(self.alpha_logit) * self.alpha_max
 
     def hard_map(self, spatial_residual: Tensor,
                  channel_residual: Tensor) -> Tensor:
@@ -91,6 +97,15 @@ class DualIrreducibilityHIT(BaseModule):
         channel_energy = channel_residual.abs().mean(dim=1, keepdim=True)
         return (2 * spatial_energy * channel_energy /
                 (spatial_energy + channel_energy + self.eps))
+
+    def sparse_gate(self, hard: Tensor) -> Tensor:
+        """Select the global top-q hard locations independently per image."""
+        batch, _, height, width = hard.shape
+        count = max(1, math.ceil(height * width * self.source_topq))
+        indices = hard.detach().flatten(2).topk(count, dim=2).indices
+        gate = torch.zeros_like(hard).flatten(2)
+        gate.scatter_(2, indices, 1)
+        return gate.reshape(batch, 1, height, width)
 
     def _gaussian_splat(self, source: Tensor, offsets: Tensor,
                         sigma: Tensor) -> Tensor:
@@ -142,14 +157,24 @@ class DualIrreducibilityHIT(BaseModule):
             dim=(2, 3), keepdim=True).detach().clamp(min=self.eps)
         hard = hard.clamp(max=self.hard_clip)
 
-        offset_params = self.offset_head(torch.cat([x, hard], dim=1))
-        offsets = torch.tanh(offset_params[:, :2]) * self.max_offset
-        sigma = self.sigma_min + torch.sigmoid(offset_params[:, 2:3]) * (
-            self.sigma_max - self.sigma_min)
+        gate = self.sparse_gate(hard_raw)
+        offset_x = x.detach() if self.detach_offset_input else x
+        offset_hard = hard.detach() if self.detach_offset_input else hard
+        offset_params = self.offset_head(torch.cat([offset_x, offset_hard],
+                                                   dim=1))
+        offsets = torch.tanh(offset_params) * self.max_offset
+        sigma = offsets.new_full(
+            (offsets.shape[0], 1, offsets.shape[2], offsets.shape[3]),
+            self.fixed_sigma)
         residual = self.residual_fuse(
             torch.cat([spatial_residual, channel_residual], dim=1))
-        transported = self._gaussian_splat(residual * hard, offsets, sigma)
-        alpha = self.alpha.to(device=x.device, dtype=x.dtype)
+        source = residual * hard * gate
+        if self.transport_enabled:
+            transported = self._gaussian_splat(source, offsets, sigma)
+            update = self.transport_projection(transported)
+        else:
+            transported = torch.zeros_like(x)
+            update = torch.zeros_like(x)
 
         self.last_aux = dict(
             feature=x,
@@ -157,18 +182,22 @@ class DualIrreducibilityHIT(BaseModule):
             channel_reconstruction=channel_reconstruction,
             hard_raw=hard_raw,
             hard=hard,
+            gate=gate,
+            source=source,
             offsets=offsets,
             sigma=sigma,
             transported=transported,
         ) if self.training else None
-        return x + alpha * transported
+        return x + update
 
     def _offset_targets(self, batch_data_samples) -> tuple[Tensor, Tensor]:
         assert self.last_aux is not None
         hard = self.last_aux['hard_raw'].detach()
         offsets = self.last_aux['offsets']
+        gate = self.last_aux['gate'].bool()
         _, _, height, width = hard.shape
         predictions, targets = [], []
+        target_count = clamped_count = 0
 
         yy, xx = torch.meshgrid(
             torch.arange(height, device=hard.device, dtype=hard.dtype),
@@ -185,22 +214,28 @@ class DualIrreducibilityHIT(BaseModule):
             for box in bboxes:
                 box_cells = box / self.stride
                 x1, y1, x2, y2 = box_cells
-                inside = ((flat_x >= x1) & (flat_x <= x2) &
-                          (flat_y >= y1) & (flat_y <= y2))
+                margin = self.offset_target_margin
+                inside = ((flat_x >= x1 - margin) &
+                          (flat_x <= x2 + margin) &
+                          (flat_y >= y1 - margin) &
+                          (flat_y <= y2 + margin))
+                inside &= gate[batch_index, 0].flatten()
                 candidates = inside.nonzero(as_tuple=False).flatten()
                 center = torch.stack(((x1 + x2) / 2, (y1 + y2) / 2))
                 if candidates.numel() == 0:
-                    distance = ((flat_x - center[0]).square() +
-                                (flat_y - center[1]).square())
-                    candidates = distance.argmin().reshape(1)
+                    continue
                 scores = hard[batch_index, 0].flatten()[candidates]
                 count = min(self.topk, candidates.numel())
                 selected = candidates[scores.topk(count).indices]
                 area = (x2 - x1).clamp(min=0) * (y2 - y1).clamp(min=0)
                 for index in selected:
                     key = int(index)
-                    target = center - torch.stack(
+                    raw_target = center - torch.stack(
                         (flat_x[index], flat_y[index]))
+                    target = raw_target.clamp(-self.max_offset,
+                                              self.max_offset)
+                    target_count += 1
+                    clamped_count += int(not torch.equal(raw_target, target))
                     if key not in assignments or area < assignments[key][0]:
                         assignments[key] = (area, target)
 
@@ -210,18 +245,49 @@ class DualIrreducibilityHIT(BaseModule):
                 targets.append(target)
 
         if not predictions:
+            self.last_aux['offset_clamp_rate'] = offsets.new_tensor(0.)
             return offsets.new_empty((0, 2)), offsets.new_empty((0, 2))
+        self.last_aux['offset_clamp_rate'] = offsets.new_tensor(
+            clamped_count / max(target_count, 1))
         return torch.stack(predictions), torch.stack(targets)
+
+    def _background_mask(self, batch_data_samples, feature: Tensor) -> Tensor:
+        batch, _, height, width = feature.shape
+        mask = torch.ones(
+            batch, 1, height, width, dtype=torch.bool, device=feature.device)
+        margin = self.offset_target_margin
+        for batch_index, data_sample in enumerate(batch_data_samples):
+            bboxes = get_box_tensor(data_sample.gt_instances.bboxes).to(
+                device=feature.device, dtype=feature.dtype) / self.stride
+            for x1, y1, x2, y2 in bboxes:
+                left = max(math.floor(float(x1)) - margin, 0)
+                top = max(math.floor(float(y1)) - margin, 0)
+                right = min(math.ceil(float(x2)) + margin + 1, width)
+                bottom = min(math.ceil(float(y2)) + margin + 1, height)
+                mask[batch_index, :, top:bottom, left:right] = False
+        return mask
+
+    def _reconstruction_loss(self, prediction: Tensor, target: Tensor,
+                             background: Tensor) -> Tensor:
+        error = (prediction - target).abs()
+        if self.background_recon_only and background.any():
+            return error.masked_select(background.expand_as(error)).mean()
+        return error.mean()
 
     def auxiliary_losses(self, batch_data_samples) -> dict[str, Tensor]:
         if self.last_aux is None:
             return {}
         feature = self.last_aux['feature'].detach()
-        loss_spatial = F.l1_loss(
-            self.last_aux['spatial_reconstruction'], feature)
-        loss_channel = F.l1_loss(
-            self.last_aux['channel_reconstruction'], feature)
-        prediction, target = self._offset_targets(batch_data_samples)
+        background = self._background_mask(batch_data_samples, feature)
+        loss_spatial = self._reconstruction_loss(
+            self.last_aux['spatial_reconstruction'], feature, background)
+        loss_channel = self._reconstruction_loss(
+            self.last_aux['channel_reconstruction'], feature, background)
+        if self.transport_enabled and self.loss_offset_weight:
+            prediction, target = self._offset_targets(batch_data_samples)
+        else:
+            prediction = target = feature.new_empty((0, 2))
+            self.last_aux['offset_clamp_rate'] = feature.new_tensor(0.)
         if prediction.numel():
             loss_offset = F.smooth_l1_loss(
                 prediction, target, beta=1.0, reduction='mean')
@@ -233,6 +299,7 @@ class DualIrreducibilityHIT(BaseModule):
             loss_hit_recon_channel=(
                 loss_channel * self.loss_recon_channel_weight),
             loss_hit_offset=loss_offset * self.loss_offset_weight,
+            hit_offset_clamp_rate=self.last_aux['offset_clamp_rate'].detach(),
         )
 
 
@@ -476,6 +543,21 @@ class FeatureAugmentNeck(BaseModule):
                 out_channels, str):
             return [int(c) for c in out_channels]
         return int(out_channels)
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata,
+                              strict, missing_keys, unexpected_keys,
+                              error_msgs):
+        """Accept checkpoints produced by the unwrapped base neck."""
+        base_keys = set(self.base_neck.state_dict())
+        for key in list(state_dict):
+            if not key.startswith(prefix):
+                continue
+            suffix = key[len(prefix):]
+            if suffix in base_keys:
+                state_dict[prefix + 'base_neck.' + suffix] = state_dict.pop(key)
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys,
+            unexpected_keys, error_msgs)
 
     @property
     def api_modules(self) -> list[AdversarialPerturbationInjection]:

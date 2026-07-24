@@ -8,16 +8,24 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+from train_all_levir_baseline import prepare_coco_dataset
 
 
 ROOT = Path(__file__).resolve().parent
 MMDET_ROOT = ROOT / 'mmdetection'
 CONFIG = MMDET_ROOT / 'configs/hit/fcos_r50-caffe_fpn-hit_12e_levir-ship.py'
 WORK_DIR = MMDET_ROOT / 'work_dirs/levir_hit/fcos'
+DATA_ROOT = ROOT / 'LevirShipData'
+DATASET_OUT = MMDET_ROOT / 'data/levir_ship_coco'
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--data-root', type=Path, default=DATA_ROOT)
+    parser.add_argument('--dataset-out', type=Path, default=DATASET_OUT)
+    parser.add_argument('--dataset-seed', type=int, default=42)
     parser.add_argument('--work-dir', type=Path, default=WORK_DIR)
     parser.add_argument('--epochs', type=int, default=12)
     parser.add_argument('--batch-size', type=int, default=4)
@@ -115,21 +123,57 @@ def main() -> None:
     if args.epochs < 1 or args.batch_size < 1 or args.num_workers < 0:
         raise ValueError('epochs/batch-size must be positive and workers >= 0')
 
+    data_root = args.data_root.resolve()
+    dataset_out = args.dataset_out.resolve()
+    image_dir = data_root / 'All Images'
+    annotation_dir = dataset_out / 'annotations'
+    annotations = [
+        annotation_dir / f'{split}.json'
+        for split in ('train', 'val', 'test')
+    ]
+    if not all(path.is_file() for path in annotations):
+        print(f'Preparing COCO annotations in {dataset_out}')
+        prepare_coco_dataset(SimpleNamespace(
+            data_root=data_root,
+            dataset_out=dataset_out,
+            seed=args.dataset_seed,
+            limit=0,
+        ))
+
     required = [
         CONFIG,
-        MMDET_ROOT / 'data/levir_ship_coco/annotations/train.json',
-        ROOT / 'LevirShipData/All Images',
+        image_dir,
+        *annotations,
     ]
     missing = [str(path) for path in required if not path.exists()]
     if missing:
         raise FileNotFoundError('Missing LEVIR-HIT inputs:\n' +
                                 '\n'.join(missing))
 
+    image_alias = dataset_out / 'images'
+    if image_alias.is_symlink():
+        if image_alias.resolve() != image_dir:
+            raise FileExistsError(
+                f'{image_alias} points to {image_alias.resolve()}, '
+                f'expected {image_dir}')
+    elif image_alias.exists():
+        raise FileExistsError(f'{image_alias} exists and is not a symlink')
+    else:
+        image_alias.symlink_to(image_dir, target_is_directory=True)
+    image_prefix = f'{image_alias}/'
     cfg_options = [
         f'train_cfg.max_epochs={args.epochs}',
         f'train_dataloader.batch_size={args.batch_size}',
         f'train_dataloader.num_workers={args.num_workers}',
         f'train_dataloader.persistent_workers={args.num_workers > 0}',
+        f'train_dataloader.dataset.ann_file={annotation_dir / "train.json"}',
+        f'train_dataloader.dataset.data_prefix.img={image_prefix}',
+        f'val_dataloader.dataset.ann_file={annotation_dir / "val.json"}',
+        f'val_dataloader.dataset.data_prefix.img={image_prefix}',
+        f'test_dataloader.dataset.ann_file={annotation_dir / "test.json"}',
+        f'test_dataloader.dataset.data_prefix.img={image_prefix}',
+        f'val_evaluator.ann_file={annotation_dir / "val.json"}',
+        f'test_evaluator.ann_file={annotation_dir / "test.json"}',
         *args.cfg_options,
     ]
     train_command = [

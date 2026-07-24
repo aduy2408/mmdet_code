@@ -1,5 +1,8 @@
 _base_ = '../fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py'
 
+load_from = '../best_coco_bbox_mAP_epoch_12.pth'
+work_dir = './work_dirs/levir_hit/sparse_detached_seed42'
+
 data_root = ''
 image_prefix = '../LevirShipData/All Images/'
 annotation_root = 'data/levir_ship_coco/annotations/'
@@ -25,13 +28,15 @@ model = dict(
             reduction=8,
             topk=4,
             max_offset=8.0,
-            sigma_min=0.5,
-            sigma_max=1.5,
-            alpha_init=1e-3,
-            alpha_max=1.0,
+            source_topq=0.01,
+            fixed_sigma=1.0,
+            detach_offset_input=True,
+            offset_target_margin=1,
+            transport_enabled=True,
+            background_recon_only=True,
             loss_recon_spatial_weight=0.1,
             loss_recon_channel_weight=0.1,
-            loss_offset_weight=1.0)),
+            loss_offset_weight=0.1)),
     bbox_head=dict(num_classes=1))
 
 train_pipeline = [

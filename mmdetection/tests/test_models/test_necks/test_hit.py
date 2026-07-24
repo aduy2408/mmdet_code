@@ -1,7 +1,7 @@
 import torch
 from mmengine.structures import InstanceData
 
-from mmdet.models.necks import (DualIrreducibilityHIT,
+from mmdet.models.necks import (DualIrreducibilityHIT, FeatureAugmentNeck,
                                 MaskedCenterConv2d)
 from mmdet.structures import DetDataSample
 
@@ -24,13 +24,11 @@ def test_masked_center_conv_cannot_read_center():
 
 
 def test_hit_shape_harmonic_map_and_gradients():
-    module = DualIrreducibilityHIT(channels=8, alpha_init=1e-3)
+    module = DualIrreducibilityHIT(channels=8)
     module.train()
     feature = torch.randn(2, 8, 8, 8, requires_grad=True)
     output = module(feature)
     assert output.shape == feature.shape
-    assert 0 <= module.alpha.item() <= 0.002
-
     high = torch.ones_like(feature)
     low = torch.zeros_like(feature)
     assert module.hard_map(high, low).max() < 1e-5
@@ -46,6 +44,32 @@ def test_hit_shape_harmonic_map_and_gradients():
     assert module.offset_head.weight.grad is not None
 
 
+def test_hit_sparse_source_and_zero_init_identity():
+    module = DualIrreducibilityHIT(
+        channels=4, source_topq=0.1, fixed_sigma=1.0)
+    module.train()
+    feature = torch.randn(1, 4, 5, 5)
+    output = module(feature)
+    assert torch.equal(output, feature)
+    assert module.last_aux['gate'].sum() == 3
+    assert torch.count_nonzero(
+        module.last_aux['source'] *
+        (1 - module.last_aux['gate'])) == 0
+
+    output.sum().backward()
+    assert module.transport_projection.weight.grad is not None
+    assert torch.count_nonzero(
+        module.transport_projection.weight.grad) > 0
+
+
+def test_hit_transport_disabled_is_identity():
+    module = DualIrreducibilityHIT(
+        channels=4, transport_enabled=False, loss_offset_weight=0)
+    module.train()
+    feature = torch.randn(1, 4, 5, 5, requires_grad=True)
+    assert torch.equal(module(feature), feature)
+
+
 def test_gaussian_splat_conserves_mass_and_handles_boundaries():
     module = DualIrreducibilityHIT(channels=1)
     source = torch.ones(1, 1, 3, 3)
@@ -59,7 +83,8 @@ def test_gaussian_splat_conserves_mass_and_handles_boundaries():
 
 
 def test_hit_offset_targets_tiny_boundary_and_overlap():
-    module = DualIrreducibilityHIT(channels=4, stride=8, topk=4)
+    module = DualIrreducibilityHIT(
+        channels=4, stride=8, topk=4, source_topq=1.0)
     module.train()
     module(torch.randn(1, 4, 4, 4))
     prediction, target = module._offset_targets([
@@ -68,3 +93,52 @@ def test_hit_offset_targets_tiny_boundary_and_overlap():
     assert 0 < prediction.shape[0] <= 9
     assert prediction.shape == target.shape
     assert torch.isfinite(target).all()
+
+
+def test_hit_offset_targets_require_selected_support_and_clamp():
+    module = DualIrreducibilityHIT(
+        channels=4,
+        stride=8,
+        topk=1,
+        source_topq=0.1,
+        max_offset=1,
+        offset_target_margin=0)
+    module.train()
+    module(torch.randn(1, 4, 4, 4))
+    module.last_aux['gate'].zero_()
+    prediction, target = module._offset_targets([
+        _sample([[0, 0, 32, 32]])
+    ])
+    assert prediction.numel() == target.numel() == 0
+
+    module.last_aux['gate'][0, 0, 0, 0] = 1
+    prediction, target = module._offset_targets([
+        _sample([[0, 0, 32, 32]])
+    ])
+    assert prediction.shape == target.shape == (1, 2)
+    assert target.abs().max() == 1
+    assert module.last_aux['offset_clamp_rate'] == 1
+
+
+def test_feature_augment_neck_loads_unwrapped_fpn_checkpoint():
+    base_cfg = dict(
+        type='FPN',
+        in_channels=[2, 4, 8],
+        out_channels=4,
+        num_outs=3)
+    baseline = FeatureAugmentNeck(
+        base_neck=base_cfg, out_channels=4, levels=())
+    wrapped = FeatureAugmentNeck(
+        base_neck=base_cfg,
+        out_channels=4,
+        levels=(0, ),
+        hit=dict(
+            type='DualIrreducibilityHIT',
+            channels=4,
+            transport_enabled=False))
+    incompatible = wrapped.load_state_dict(
+        baseline.base_neck.state_dict(), strict=False)
+    assert not incompatible.unexpected_keys
+    assert incompatible.missing_keys
+    assert all(
+        key.startswith('hit_modules.') for key in incompatible.missing_keys)
