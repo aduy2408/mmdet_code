@@ -2,6 +2,7 @@
 from .csp_darknet import CSPDarknet
 from .cspnext import CSPNeXt
 from .darknet import Darknet
+from .deviation_resnet import DeviationResNet, PhaseDownsample
 from .detectors_resnet import DetectoRS_ResNet
 from .detectors_resnext import DetectoRS_ResNeXt
 from .efficientnet import EfficientNet
@@ -22,6 +23,7 @@ __all__ = [
     'RegNet', 'ResNet', 'ResNetV1d', 'ResNeXt', 'SSDVGG', 'HRNet',
     'MobileNetV2', 'Res2Net', 'HourglassNet', 'DetectoRS_ResNet',
     'DetectoRS_ResNeXt', 'Darknet', 'ResNeSt', 'TridentResNet', 'CSPDarknet',
-    'SwinTransformer', 'PyramidVisionTransformer',
+    'SwinTransformer', 'PyramidVisionTransformer', 'DeviationResNet',
+    'PhaseDownsample',
     'PyramidVisionTransformerV2', 'EfficientNet', 'CSPNeXt'
 ]
