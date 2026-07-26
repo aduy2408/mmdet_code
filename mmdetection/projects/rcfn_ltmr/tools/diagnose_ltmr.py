@@ -132,10 +132,24 @@ def main():
     parser.add_argument('--topk', type=int, default=5)
     parser.add_argument('--score-threshold', type=float, default=0.05)
     parser.add_argument('--max-images', type=int, default=0)
+    parser.add_argument(
+        '--variant', choices=('baseline', 'r2', 'l1'), default='baseline')
     args = parser.parse_args()
 
     register_all_modules()
     cfg = Config.fromfile(args.config)
+    if args.variant == 'r2':
+        cfg.model.neck.update(
+            type='RCFNFPN', eps=1e-4, gamma_init=0.0)
+    elif args.variant == 'l1':
+        cfg.model.bbox_head.update(
+            type='LTMRFCOSHead',
+            tiny_max_sqrt_area=16.0,
+            radius=args.radius,
+            topk=args.topk,
+            margin=1.0,
+            loss_weight=0.05)
+    cfg.work_dir = str(args.output_dir / 'runner')
     cfg.load_from = str(args.checkpoint)
     runner = Runner.from_cfg(cfg)
     runner.load_or_resume()
