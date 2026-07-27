@@ -41,6 +41,7 @@ def main() -> None:
     model = init_detector(config, args.checkpoint, device=args.device)
     loader = Runner.build_dataloader(config.val_dataloader)
     rows = []
+    detail_gradient_norm = None
 
     for index, data in enumerate(loader):
         if index >= args.max_images:
@@ -48,6 +49,17 @@ def main() -> None:
         processed = model.data_preprocessor(data, training=False)
         inputs = processed['inputs']
         samples = processed['data_samples']
+        if index == 0:
+            model.train()
+            model.zero_grad(set_to_none=True)
+            gradient_losses = model.loss(inputs, samples)
+            sum(
+                sum(values) if isinstance(values, (list, tuple)) else values
+                for values in gradient_losses.values()).backward()
+            detail_gradient_norm = float(
+                model.neck.detail_mixer[-1].weight.grad.detach().norm())
+            model.zero_grad(set_to_none=True)
+            model.eval()
         with torch.inference_mode():
             _, aux = model.position_maps(inputs)
             targets = model.auxiliary_targets(
@@ -80,12 +92,15 @@ def main() -> None:
             'loss_offset': float(losses['loss_offset']),
             'position_min': float(probability.min()),
             'position_max': float(probability.max()),
+            'correction_gate_mean': float(aux['correction_gate'].mean()),
+            'phase_gate_mean': float(aux['phase_gate'].mean()),
         })
 
     summary = {
         'images': rows,
         'detail_output_weight_norm': float(
             model.neck.detail_mixer[-1].weight.detach().norm()),
+        'detail_output_gradient_norm': detail_gradient_norm,
     }
     (output_dir / 'summary.json').write_text(
         json.dumps(summary, indent=2), encoding='utf-8')

@@ -112,12 +112,18 @@ def correction_statistics(config: Config, checkpoint: str,
         enhanced, aux = model.neck.forward_with_aux(backbone)
         correction = enhanced[0] - baseline[0]
         position = aux['position_logits'].sigmoid()
+        detail_output = model.neck.detail_mixer[-1]
     return {
         'p3_correction_ratio': float(
             correction.norm() / baseline[0].norm().clamp_min(1e-12)),
         'p3_correction_abs_mean': float(correction.abs().mean()),
         'position_mean': float(position.mean()),
         'position_max': float(position.max()),
+        'correction_gate_mean': float(aux['correction_gate'].mean()),
+        'correction_gate_max': float(aux['correction_gate'].max()),
+        'phase_gate_mean': float(aux['phase_gate'].mean()),
+        'phase_gate_max': float(aux['phase_gate'].max()),
+        'detail_output_weight_norm': float(detail_output.weight.norm()),
     }
 
 

@@ -163,7 +163,8 @@ class PAHRFCOS(FCOS):
         adjusted = list(bbox_preds)
         if not self.use_phase_shift:
             return adjusted
-        position = aux['position_logits'].sigmoid()
+        position = aux.get(
+            'phase_gate', aux['position_logits'].sigmoid())
         offsets = aux['offsets']
         shift_scale = float(self.position_stride)
         if self.bbox_head.norm_on_bbox and self.training:

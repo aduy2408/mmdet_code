@@ -17,11 +17,21 @@ class PAHRFPN(FPN):
                  *args,
                  locator_channels: int = 64,
                  detail_channels: int = 64,
+                 gate_power: float = 1.0,
+                 correction_gate_floor: float = 0.0,
+                 detach_position_gate: bool = False,
                  **kwargs) -> None:
         super().__init__(*args, **kwargs)
         channels = self.out_channels
         if locator_channels < 1 or detail_channels < 1:
             raise ValueError('PAHR hidden channel counts must be positive')
+        if gate_power <= 0:
+            raise ValueError('gate_power must be positive')
+        if not 0 <= correction_gate_floor <= 1:
+            raise ValueError('correction_gate_floor must be in [0, 1]')
+        self.gate_power = float(gate_power)
+        self.correction_gate_floor = float(correction_gate_floor)
+        self.detach_position_gate = bool(detach_position_gate)
 
         self.locator = nn.Sequential(
             nn.Conv2d(4 * channels, locator_channels, 1),
@@ -101,17 +111,24 @@ class PAHRFPN(FPN):
         position_logits = phase[:, :1]
         offsets = phase[:, 1:].sigmoid()
         position = position_logits.sigmoid()
+        phase_gate = position.pow(self.gate_power)
+        if self.detach_position_gate:
+            phase_gate = phase_gate.detach()
+        correction_gate = self.correction_gate_floor + (
+            1 - self.correction_gate_floor) * phase_gate
         phase_context = F.pixel_unshuffle(
-            torch.cat((position, position * offsets), dim=1), 2)
+            torch.cat((correction_gate, correction_gate * offsets), dim=1), 2)
 
         residuals = self.detail_mixer(
             torch.cat((*bands, phase_context), dim=1)).chunk(3, dim=1)
         correction = self.inverse_haar(
             torch.zeros_like(bands[0]), *residuals)
-        output = p3 + position * correction
+        output = p3 + correction_gate * correction
         aux = dict(
             position_logits=position_logits,
             offsets=offsets,
+            correction_gate=correction_gate,
+            phase_gate=phase_gate,
         )
         return output, aux
 

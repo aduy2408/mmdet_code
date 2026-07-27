@@ -20,6 +20,21 @@ VARIANTS = {
     'haar_shift_768': dict(image_size=768, phase_shift=True, giou=False),
     'haar_shift_giou_768': dict(
         image_size=768, phase_shift=True, giou=True),
+    'haar_shift_sched_768': dict(
+        image_size=768, phase_shift=True, giou=False, scaled_schedule=True),
+    'haar_v3_gate_768': dict(
+        image_size=768,
+        phase_shift=True,
+        giou=False,
+        scaled_schedule=True,
+        v3_gate=True),
+    'haar_v3_gate_lr10_768': dict(
+        image_size=768,
+        phase_shift=True,
+        giou=False,
+        scaled_schedule=True,
+        v3_gate=True,
+        detail_lr_mult=10.0),
 }
 
 
@@ -86,6 +101,14 @@ def set_resize_scale(obj, image_size: int) -> None:
             set_resize_scale(value, image_size)
 
 
+def scale_schedule(cfg, epochs: int) -> None:
+    milestones = [round(epochs * 2 / 3), round(epochs * 11 / 12)]
+    for scheduler in cfg.param_scheduler:
+        if scheduler.type == 'MultiStepLR':
+            scheduler.end = epochs
+            scheduler.milestones = milestones
+
+
 def write_variant_config(variant: str, args: argparse.Namespace,
                          dataset_out: Path, image_dir: Path) -> Path:
     root = str(levir.mmdet_root())
@@ -104,6 +127,19 @@ def write_variant_config(variant: str, args: argparse.Namespace,
             cfg.train_dataloader, cfg.val_dataloader, cfg.test_dataloader):
         set_resize_scale(dataloader.dataset.pipeline, image_size)
     cfg.model.use_phase_shift = settings['phase_shift']
+    if settings.get('v3_gate'):
+        cfg.model.neck.update(
+            gate_power=0.5,
+            correction_gate_floor=0.05,
+            detach_position_gate=True)
+    if settings.get('scaled_schedule'):
+        scale_schedule(cfg, args.epochs)
+    if detail_lr_mult := settings.get('detail_lr_mult'):
+        paramwise = cfg.optim_wrapper.paramwise_cfg
+        custom_keys = dict(paramwise.get('custom_keys', {}))
+        custom_keys['neck.detail_mixer.3'] = dict(
+            lr_mult=detail_lr_mult, decay_mult=0.0)
+        paramwise.custom_keys = custom_keys
     if settings['giou']:
         cfg.model.bbox_head.loss_bbox = dict(
             type='GIoULoss', loss_weight=1.0)
@@ -114,7 +150,10 @@ def write_variant_config(variant: str, args: argparse.Namespace,
         name=variant,
         image_size=image_size,
         phase_shift=settings['phase_shift'],
-        giou=settings['giou'])
+        giou=settings['giou'],
+        scaled_schedule=settings.get('scaled_schedule', False),
+        v3_gate=settings.get('v3_gate', False),
+        detail_lr_mult=settings.get('detail_lr_mult', 1.0))
     output = Path(cfg.work_dir) / 'patched_config.py'
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg.dump(str(output))

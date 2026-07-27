@@ -7,6 +7,7 @@ from mmengine.structures import InstanceData
 
 from mmdet.structures import DetDataSample
 from projects.pahr import PAHRFCOS, PAHRFPN
+from train_all_haar import VARIANTS, scale_schedule
 
 
 def sample(boxes, img_shape=(32, 32), ignored=(), **metainfo):
@@ -139,9 +140,49 @@ def test_offset_context_is_position_gated():
     context = captured['input'][:, -12:]
     packed = torch.nn.functional.pixel_unshuffle(
         torch.cat((
-            aux['position_logits'].sigmoid(),
-            aux['position_logits'].sigmoid() * aux['offsets']), dim=1), 2)
+            aux['correction_gate'],
+            aux['correction_gate'] * aux['offsets']), dim=1), 2)
     assert torch.equal(context, packed)
+
+
+def test_v3_gates_are_exact_and_detach_position_gradient():
+    module = neck(
+        gate_power=0.5,
+        correction_gate_floor=0.05,
+        detach_position_gate=True)
+    with torch.no_grad():
+        module.locator[-1].weight.zero_()
+        module.locator[-1].bias[:4].fill_(torch.logit(torch.tensor(0.25)))
+        module.detail_mixer[-1].weight.fill_(0.1)
+    p3 = torch.randn(1, 4, 8, 8, requires_grad=True)
+    output, aux = module.recompose(p3)
+    aux['position_logits'].retain_grad()
+    assert torch.allclose(aux['phase_gate'], torch.full_like(
+        aux['phase_gate'], 0.5))
+    assert torch.allclose(aux['correction_gate'], torch.full_like(
+        aux['correction_gate'], 0.525))
+    output.square().mean().backward()
+    assert aux['position_logits'].grad is None
+    assert module.locator[-1].weight.grad is not None
+
+
+def test_scaled_schedule():
+    cfg = Config(
+        dict(param_scheduler=[
+            dict(type='ConstantLR', begin=0, end=500),
+            dict(
+                type='MultiStepLR',
+                begin=0,
+                end=12,
+                milestones=[8, 11])
+        ]))
+    scale_schedule(cfg, 20)
+    assert cfg.param_scheduler[1].end == 20
+    assert cfg.param_scheduler[1].milestones == [13, 18]
+    scale_schedule(cfg, 40)
+    assert cfg.param_scheduler[1].end == 40
+    assert cfg.param_scheduler[1].milestones == [27, 37]
+    assert VARIANTS['haar_v3_gate_lr10_768']['detail_lr_mult'] == 10.0
 
 
 def test_phase_shift_algebra_and_level_isolation():
