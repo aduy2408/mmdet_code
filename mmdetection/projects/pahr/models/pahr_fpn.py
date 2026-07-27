@@ -20,6 +20,9 @@ class PAHRFPN(FPN):
                  gate_power: float = 1.0,
                  correction_gate_floor: float = 0.0,
                  detach_position_gate: bool = False,
+                 guide_channels: int = 0,
+                 use_output_gate: bool = True,
+                 correction_gain: float = 1.0,
                  **kwargs) -> None:
         super().__init__(*args, **kwargs)
         channels = self.out_channels
@@ -29,12 +32,28 @@ class PAHRFPN(FPN):
             raise ValueError('gate_power must be positive')
         if not 0 <= correction_gate_floor <= 1:
             raise ValueError('correction_gate_floor must be in [0, 1]')
+        if guide_channels < 0:
+            raise ValueError('guide_channels must be non-negative')
+        if correction_gain < 0:
+            raise ValueError('correction_gain must be non-negative')
         self.gate_power = float(gate_power)
         self.correction_gate_floor = float(correction_gate_floor)
         self.detach_position_gate = bool(detach_position_gate)
+        self.guide_channels = int(guide_channels)
+        self.use_output_gate = bool(use_output_gate)
+        self.correction_gain = float(correction_gain)
+        packed_guide_channels = 16 * self.guide_channels
+        self.guide_projection = (
+            nn.Sequential(
+                nn.Conv2d(self.in_channels[0], self.guide_channels, 1),
+                nn.SiLU(inplace=True))
+            if self.guide_channels else None)
 
         self.locator = nn.Sequential(
-            nn.Conv2d(4 * channels, locator_channels, 1),
+            nn.Conv2d(
+                4 * channels + packed_guide_channels,
+                locator_channels,
+                1),
             nn.Conv2d(
                 locator_channels,
                 locator_channels,
@@ -45,7 +64,10 @@ class PAHRFPN(FPN):
             nn.Conv2d(locator_channels, 12, 1),
         )
         self.detail_mixer = nn.Sequential(
-            nn.Conv2d(4 * channels + 12, detail_channels, 1),
+            nn.Conv2d(
+                4 * channels + packed_guide_channels + 12,
+                detail_channels,
+                1),
             nn.Conv2d(
                 detail_channels,
                 detail_channels,
@@ -105,9 +127,31 @@ class PAHRFPN(FPN):
         output[..., 1::2, 1::2] = bottom_right
         return output
 
-    def recompose(self, p3: Tensor) -> tuple[Tensor, dict[str, Tensor]]:
+    def guide_features(self, c2: Tensor | None,
+                       band_shape: tuple[int, int]) -> Tensor | None:
+        if self.guide_projection is None:
+            return None
+        if c2 is None:
+            raise ValueError('C2 guidance is enabled but C2 was not provided')
+        height, width = c2.shape[-2:]
+        if height % 4 or width % 4:
+            raise ValueError(
+                f'PAHR C2 guidance requires size divisible by 4, '
+                f'got {height}x{width}')
+        guidance = F.pixel_unshuffle(self.guide_projection(c2), 4)
+        if guidance.shape[-2:] != band_shape:
+            raise ValueError(
+                'PAHR C2 guidance must align with Haar bands, got '
+                f'{guidance.shape[-2:]} and {band_shape}')
+        return guidance
+
+    def recompose(self, p3: Tensor,
+                  c2: Tensor | None = None) -> tuple[Tensor, dict[str, Tensor]]:
         bands = self.haar(p3)
-        phase = F.pixel_shuffle(self.locator(torch.cat(bands, dim=1)), 2)
+        guidance = self.guide_features(c2, bands[0].shape[-2:])
+        band_context = (*bands,) if guidance is None else (*bands, guidance)
+        phase = F.pixel_shuffle(
+            self.locator(torch.cat(band_context, dim=1)), 2)
         position_logits = phase[:, :1]
         offsets = phase[:, 1:].sigmoid()
         position = position_logits.sigmoid()
@@ -120,15 +164,22 @@ class PAHRFPN(FPN):
             torch.cat((correction_gate, correction_gate * offsets), dim=1), 2)
 
         residuals = self.detail_mixer(
-            torch.cat((*bands, phase_context), dim=1)).chunk(3, dim=1)
+            torch.cat((*band_context, phase_context), dim=1)).chunk(3, dim=1)
         correction = self.inverse_haar(
             torch.zeros_like(bands[0]), *residuals)
-        output = p3 + correction_gate * correction
+        output_gate = correction_gate if self.use_output_gate else 1.0
+        applied_correction = self.correction_gain * output_gate * correction
+        output = p3 + applied_correction
         aux = dict(
             position_logits=position_logits,
             offsets=offsets,
             correction_gate=correction_gate,
             phase_gate=phase_gate,
+            guidance_rms=(
+                p3.new_zeros(()) if guidance is None
+                else guidance.square().mean().sqrt()),
+            raw_correction_rms=correction.square().mean().sqrt(),
+            applied_correction_rms=applied_correction.square().mean().sqrt(),
         )
         return output, aux
 
@@ -136,7 +187,7 @@ class PAHRFPN(FPN):
             self, inputs: tuple[Tensor, ...]
     ) -> tuple[tuple[Tensor, ...], dict[str, Tensor]]:
         outputs = list(super().forward(inputs))
-        outputs[0], aux = self.recompose(outputs[0])
+        outputs[0], aux = self.recompose(outputs[0], inputs[0])
         return tuple(outputs), aux
 
     def forward(self, inputs: tuple[Tensor, ...]) -> tuple[Tensor, ...]:

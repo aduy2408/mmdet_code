@@ -113,6 +113,15 @@ def correction_statistics(config: Config, checkpoint: str,
         correction = enhanced[0] - baseline[0]
         position = aux['position_logits'].sigmoid()
         detail_output = model.neck.detail_mixer[-1]
+        _, _, _, centers = model.auxiliary_targets(
+            aux['position_logits'], batch['data_samples'])
+        correction_energy = correction.abs().mean(dim=1, keepdim=True)
+        center_energy = (
+            correction_energy[centers].mean()
+            if centers.any() else correction_energy.new_zeros(()))
+        background_energy = (
+            correction_energy[~centers].mean()
+            if (~centers).any() else correction_energy.new_zeros(()))
     return {
         'p3_correction_ratio': float(
             correction.norm() / baseline[0].norm().clamp_min(1e-12)),
@@ -123,7 +132,15 @@ def correction_statistics(config: Config, checkpoint: str,
         'correction_gate_max': float(aux['correction_gate'].max()),
         'phase_gate_mean': float(aux['phase_gate'].mean()),
         'phase_gate_max': float(aux['phase_gate'].max()),
-        'detail_output_weight_norm': float(detail_output.weight.norm()),
+        'guidance_rms': float(aux['guidance_rms']),
+        'raw_correction_rms': float(aux['raw_correction_rms']),
+        'applied_correction_rms': float(aux['applied_correction_rms']),
+        'tiny_center_correction_abs_mean': float(center_energy),
+        'background_correction_abs_mean': float(background_energy),
+        'tiny_correction_concentration': float(
+            center_energy / background_energy.clamp_min(1e-12)),
+        'detail_output_weight_norm': float(
+            detail_output.weight.detach().norm()),
     }
 
 

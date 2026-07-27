@@ -35,6 +35,27 @@ VARIANTS = {
         scaled_schedule=True,
         v3_gate=True,
         detail_lr_mult=10.0),
+    'haar_v4_ungated_768': dict(
+        image_size=768,
+        phase_shift=True,
+        giou=False,
+        scaled_schedule=True,
+        use_output_gate=False),
+    'haar_v4_c2_768': dict(
+        image_size=768,
+        phase_shift=True,
+        giou=False,
+        scaled_schedule=True,
+        use_output_gate=False,
+        guide_channels=16),
+    'haar_v4_c2_lr10_768': dict(
+        image_size=768,
+        phase_shift=True,
+        giou=False,
+        scaled_schedule=True,
+        use_output_gate=False,
+        guide_channels=16,
+        detail_lr_mult=10.0),
 }
 
 
@@ -132,6 +153,10 @@ def write_variant_config(variant: str, args: argparse.Namespace,
             gate_power=0.5,
             correction_gate_floor=0.05,
             detach_position_gate=True)
+    cfg.model.neck.update(
+        guide_channels=settings.get('guide_channels', 0),
+        use_output_gate=settings.get('use_output_gate', True),
+        correction_gain=1.0)
     if settings.get('scaled_schedule'):
         scale_schedule(cfg, args.epochs)
     if detail_lr_mult := settings.get('detail_lr_mult'):
@@ -153,6 +178,9 @@ def write_variant_config(variant: str, args: argparse.Namespace,
         giou=settings['giou'],
         scaled_schedule=settings.get('scaled_schedule', False),
         v3_gate=settings.get('v3_gate', False),
+        guide_channels=settings.get('guide_channels', 0),
+        use_output_gate=settings.get('use_output_gate', True),
+        correction_gain=1.0,
         detail_lr_mult=settings.get('detail_lr_mult', 1.0))
     output = Path(cfg.work_dir) / 'patched_config.py'
     output.parent.mkdir(parents=True, exist_ok=True)

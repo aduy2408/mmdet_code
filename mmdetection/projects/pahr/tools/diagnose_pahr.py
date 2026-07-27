@@ -42,6 +42,7 @@ def main() -> None:
     loader = Runner.build_dataloader(config.val_dataloader)
     rows = []
     detail_gradient_norm = None
+    guide_gradient_norm = None
 
     for index, data in enumerate(loader):
         if index >= args.max_images:
@@ -58,6 +59,9 @@ def main() -> None:
                 for values in gradient_losses.values()).backward()
             detail_gradient_norm = float(
                 model.neck.detail_mixer[-1].weight.grad.detach().norm())
+            if model.neck.guide_projection is not None:
+                guide_gradient_norm = float(
+                    model.neck.guide_projection[0].weight.grad.detach().norm())
             model.zero_grad(set_to_none=True)
             model.eval()
         with torch.inference_mode():
@@ -94,6 +98,10 @@ def main() -> None:
             'position_max': float(probability.max()),
             'correction_gate_mean': float(aux['correction_gate'].mean()),
             'phase_gate_mean': float(aux['phase_gate'].mean()),
+            'guidance_rms': float(aux['guidance_rms']),
+            'raw_correction_rms': float(aux['raw_correction_rms']),
+            'applied_correction_rms': float(
+                aux['applied_correction_rms']),
         })
 
     summary = {
@@ -101,6 +109,7 @@ def main() -> None:
         'detail_output_weight_norm': float(
             model.neck.detail_mixer[-1].weight.detach().norm()),
         'detail_output_gradient_norm': detail_gradient_norm,
+        'guide_projection_gradient_norm': guide_gradient_norm,
     }
     (output_dir / 'summary.json').write_text(
         json.dumps(summary, indent=2), encoding='utf-8')

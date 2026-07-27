@@ -33,7 +33,7 @@ def neck(**kwargs):
         **kwargs)
 
 
-def detector(use_phase_shift=False, norm_on_bbox=False):
+def detector(use_phase_shift=False, norm_on_bbox=False, guide_channels=0):
     return PAHRFCOS(
         backbone=dict(
             type='ResNet',
@@ -52,7 +52,9 @@ def detector(use_phase_shift=False, norm_on_bbox=False):
             add_extra_convs='on_output',
             num_outs=5,
             locator_channels=8,
-            detail_channels=8),
+            detail_channels=8,
+            guide_channels=guide_channels,
+            use_output_gate=not guide_channels),
         bbox_head=dict(
             type='FCOSHead',
             num_classes=1,
@@ -166,6 +168,49 @@ def test_v3_gates_are_exact_and_detach_position_gradient():
     assert module.locator[-1].weight.grad is not None
 
 
+def test_v4_c2_guidance_alignment_effect_and_gradient():
+    module = neck(
+        guide_channels=2,
+        use_output_gate=False,
+        correction_gain=1.0)
+    module.init_weights()
+    p3 = torch.randn(1, 4, 8, 8, requires_grad=True)
+    c2 = torch.randn(1, 1, 16, 16, requires_grad=True)
+    identity, aux = module.recompose(p3, c2)
+    assert torch.equal(identity, p3)
+    assert aux['guidance_rms'] > 0
+
+    with torch.no_grad():
+        module.detail_mixer[-1].weight.fill_(0.1)
+    first, aux = module.recompose(p3, c2)
+    second, _ = module.recompose(p3, c2 + 1)
+    assert not torch.equal(first, second)
+    assert torch.allclose(
+        aux['raw_correction_rms'], aux['applied_correction_rms'])
+    first.square().mean().backward()
+    assert c2.grad is not None and c2.grad.abs().sum() > 0
+    assert module.guide_projection[0].weight.grad is not None
+    assert module.detail_mixer[-1].weight.grad is not None
+
+
+def test_v4_guidance_validation_and_disabled_path():
+    guided = neck(guide_channels=2)
+    with pytest.raises(ValueError, match='was not provided'):
+        guided.recompose(torch.randn(1, 4, 8, 8))
+    with pytest.raises(ValueError, match='divisible by 4'):
+        guided.recompose(
+            torch.randn(1, 4, 8, 8), torch.randn(1, 1, 15, 16))
+    with pytest.raises(ValueError, match='align with Haar bands'):
+        guided.recompose(
+            torch.randn(1, 4, 8, 8), torch.randn(1, 1, 20, 20))
+
+    unguided = neck(guide_channels=0)
+    p3 = torch.randn(1, 4, 8, 8)
+    without_c2, _ = unguided.recompose(p3)
+    with_c2, _ = unguided.recompose(p3, torch.randn(1, 1, 16, 16))
+    assert torch.equal(without_c2, with_c2)
+
+
 def test_scaled_schedule():
     cfg = Config(
         dict(param_scheduler=[
@@ -183,6 +228,8 @@ def test_scaled_schedule():
     assert cfg.param_scheduler[1].end == 40
     assert cfg.param_scheduler[1].milestones == [27, 37]
     assert VARIANTS['haar_v3_gate_lr10_768']['detail_lr_mult'] == 10.0
+    assert VARIANTS['haar_v4_c2_768']['guide_channels'] == 16
+    assert not VARIANTS['haar_v4_ungated_768']['use_output_gate']
 
 
 def test_phase_shift_algebra_and_level_isolation():
@@ -278,6 +325,23 @@ def test_detector_loss_predict_and_config(use_phase_shift):
         scale_factor=(1.0, 1.0))
     with torch.inference_mode():
         predictions = model.predict(inputs, [predict_sample])
+    assert len(predictions) == 1
+
+
+def test_detector_c2_guidance_loss_and_predict():
+    model = detector(use_phase_shift=True, guide_channels=4)
+    inputs = torch.randn(1, 3, 64, 64)
+    data_sample = sample(
+        [[8, 8, 16, 16]],
+        img_shape=(64, 64),
+        ori_shape=(64, 64),
+        scale_factor=(1.0, 1.0))
+    model.train()
+    losses = model.loss(inputs, [data_sample])
+    assert all(torch.isfinite(loss) for loss in losses.values())
+    model.eval()
+    with torch.inference_mode():
+        predictions = model.predict(inputs, [data_sample])
     assert len(predictions) == 1
     assert 'pred_instances' in predictions[0]
 
