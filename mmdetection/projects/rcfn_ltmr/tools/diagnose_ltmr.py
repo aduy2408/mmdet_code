@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from mmengine.config import Config
 from mmengine.runner import Runner
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
@@ -123,6 +124,39 @@ def summarize(rows, split_crowding=True):
     return result
 
 
+def position_statistics(model, position, samples):
+    target, valid = model.position_targets(position, samples)
+    centers = []
+    for index, sample in enumerate(samples):
+        boxes = sample.gt_instances.bboxes
+        boxes = boxes.tensor if hasattr(boxes, 'tensor') else boxes
+        tiny = boxes[model.tiny_mask(boxes, sample.metainfo)]
+        for box in tiny:
+            x = int(((box[0] + box[2]) / (2 * model.position_stride))
+                    .round().clamp(0, position.shape[3] - 1))
+            y = int(((box[1] + box[3]) / (2 * model.position_stride))
+                    .round().clamp(0, position.shape[2] - 1))
+            centers.append(float(position[index, 0, y, x]))
+    background = valid & (target < 0.1)
+    false_count = int(((position >= 0.5) & background).sum())
+    return target, {
+        'center_values': centers,
+        'background_false_count': false_count,
+        'background_count': int(background.sum()),
+    }
+
+
+def save_position_overlay(position, target, output_path):
+    predicted = (position.detach().cpu().numpy() * 255).astype(np.uint8)
+    expected = (target.detach().cpu().numpy() * 255).astype(np.uint8)
+    image = np.zeros((*predicted.shape, 3), dtype=np.uint8)
+    image[..., 0] = expected
+    image[..., 1] = predicted
+    Image.fromarray(image).resize(
+        (predicted.shape[1] * 8, predicted.shape[0] * 8),
+        resample=Image.Resampling.NEAREST).save(output_path)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('config', type=Path)
@@ -133,7 +167,10 @@ def main():
     parser.add_argument('--score-threshold', type=float, default=0.05)
     parser.add_argument('--max-images', type=int, default=0)
     parser.add_argument(
-        '--variant', choices=('baseline', 'r2', 'l1'), default='baseline')
+        '--variant',
+        choices=('baseline', 'r2', 'pg_aux', 'pg_h', 'pg_ch', 'l1'),
+        default='baseline')
+    parser.add_argument('--max-position-maps', type=int, default=16)
     args = parser.parse_args()
 
     register_all_modules()
@@ -154,29 +191,55 @@ def main():
     runner = Runner.from_cfg(cfg)
     runner.load_or_resume()
     model = runner.model
+    diagnostic_model = model.module if hasattr(model, 'module') else model
     model.eval()
-    if not isinstance(model.bbox_head, FCOSHead):
+    if not isinstance(diagnostic_model.bbox_head, FCOSHead):
         raise TypeError('diagnostic requires an FCOSHead-compatible model')
 
     rows = []
+    position_stats = {
+        'center_values': [], 'background_false_count': 0,
+        'background_count': 0,
+    }
+    map_count = 0
+    map_dir = args.output_dir / 'position_maps'
+    args.output_dir.mkdir(parents=True, exist_ok=True)
     with torch.inference_mode():
         for batch_index, data_batch in enumerate(runner.test_dataloader):
             if args.max_images and batch_index >= args.max_images:
                 break
             data = model.data_preprocessor(data_batch, training=False)
-            features = model.extract_feat(data['inputs'])
-            cls_scores = model.bbox_head(features)[0]
+            if hasattr(diagnostic_model, 'position_maps'):
+                features, position, _ = diagnostic_model.position_maps(
+                    data['inputs'])
+                target, stats = position_statistics(
+                    diagnostic_model, position, data['data_samples'])
+                position_stats['center_values'].extend(
+                    stats['center_values'])
+                position_stats['background_false_count'] += (
+                    stats['background_false_count'])
+                position_stats['background_count'] += stats['background_count']
+                for index in range(position.shape[0]):
+                    if map_count >= args.max_position_maps:
+                        break
+                    map_dir.mkdir(parents=True, exist_ok=True)
+                    save_position_overlay(
+                        position[index, 0], target[index, 0],
+                        map_dir / f'{map_count:04d}.png')
+                    map_count += 1
+            else:
+                features = model.extract_feat(data['inputs'])
+            cls_scores = diagnostic_model.bbox_head(features)[0]
             sizes = [score.shape[-2:] for score in cls_scores]
-            points = model.bbox_head.prior_generator.grid_priors(
+            points = diagnostic_model.bbox_head.prior_generator.grid_priors(
                 sizes, dtype=cls_scores[0].dtype,
                 device=cls_scores[0].device)
             for index, sample in enumerate(data['data_samples']):
                 rows.extend(rows_for_image(
-                    model.bbox_head, cls_scores[0][index], points,
+                    diagnostic_model.bbox_head, cls_scores[0][index], points,
                     sample.gt_instances, sample.metainfo, args.radius,
                     args.topk, args.score_threshold))
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
     csv_path = args.output_dir / 'tiny_gt_margins.csv'
     if rows:
         with csv_path.open('w', newline='', encoding='utf-8') as handle:
@@ -184,6 +247,21 @@ def main():
             writer.writeheader()
             writer.writerows(rows)
     summary = summarize(rows)
+    if hasattr(diagnostic_model, 'position_maps'):
+        values = np.asarray(position_stats['center_values'])
+        summary['position'] = {
+            'tiny_center_count': len(values),
+            'mean_at_tiny_centers': (
+                float(values.mean()) if len(values) else None),
+            'center_recall_at_0.5': (
+                float(np.mean(values >= 0.5)) if len(values) else None),
+            'background_false_activation_at_0.5': (
+                position_stats['background_false_count']
+                / max(position_stats['background_count'], 1)),
+            'background_cell_count': position_stats['background_count'],
+            'saved_maps': map_count,
+            'overlay_channels': {'red': 'target', 'green': 'prediction'},
+        }
     (args.output_dir / 'summary.json').write_text(
         json.dumps(summary, indent=2), encoding='utf-8')
     print(json.dumps(summary, indent=2))
