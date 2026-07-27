@@ -21,8 +21,11 @@ from PIL import Image
 MODEL_CONFIGS = {
     "r2": "projects/rcfn_ltmr/configs/fcos_r2.py",
     "pg_aux": "projects/rcfn_ltmr/configs/fcos_pg_aux.py",
+    "pg_aux_w01": "projects/rcfn_ltmr/configs/fcos_pg_aux_w01.py",
     "pg_h": "projects/rcfn_ltmr/configs/fcos_pg_h.py",
     "pg_ch": "projects/rcfn_ltmr/configs/fcos_pg_ch.py",
+    "pg_ch_w01_floor":
+        "projects/rcfn_ltmr/configs/fcos_pg_ch_w01_floor.py",
     "l1": "projects/rcfn_ltmr/configs/fcos_l1.py",
 }
 SPLIT_RATIOS = {"train": 0.70, "val": 0.15, "test": 0.15}
@@ -272,6 +275,13 @@ def find_checkpoint(work_dir: Path) -> Path:
     raise FileNotFoundError(f"No best_*.pth or latest.pth in {work_dir}")
 
 
+def find_test_metrics(test_dir: Path) -> Path:
+    metrics = sorted(test_dir.glob("*/*.json"))
+    if not metrics:
+        raise FileNotFoundError(f"No test metrics JSON under {test_dir}")
+    return metrics[-1]
+
+
 def command_env() -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
@@ -340,7 +350,7 @@ def run_job(model_name: str, args: argparse.Namespace,
         str(test_dir / "predictions.pkl"),
     ])
     if not args.skip_diagnostic:
-        run([
+        diagnostic_command = [
             sys.executable,
             str(mmdet_root() / "projects/rcfn_ltmr/tools/diagnose_ltmr.py"),
             str(config),
@@ -349,7 +359,26 @@ def run_job(model_name: str, args: argparse.Namespace,
             model_name,
             "--output-dir",
             str(work_dir / "diagnostics"),
-        ])
+        ]
+        if model_name.startswith("pg_"):
+            reference_test_dir = (
+                resolve_path(args.work_dir) / "r2" / "test_results")
+            reference_predictions = (
+                reference_test_dir / "predictions.pkl")
+            if not reference_predictions.is_file():
+                raise FileNotFoundError(
+                    "Paired PG diagnostics require the R2 predictions at "
+                    f"{reference_predictions}")
+            diagnostic_command.extend([
+                "--reference-predictions", str(reference_predictions),
+                "--candidate-predictions",
+                str(test_dir / "predictions.pkl"),
+                "--reference-test-metrics",
+                str(find_test_metrics(reference_test_dir)),
+                "--candidate-test-metrics",
+                str(find_test_metrics(test_dir)),
+            ])
+        run(diagnostic_command)
     upload_work_dir(model_name, args)
 
 
@@ -362,7 +391,9 @@ def parse_args() -> argparse.Namespace:
         "--work-dir", default="mmdetection/work_dirs/levir_rcfn_ltmr")
     parser.add_argument(
         "--models", default="r2,pg_aux,pg_h,pg_ch",
-        help="Comma-separated: r2,pg_aux,pg_h,pg_ch,l1.")
+        help=(
+            "Comma-separated: r2,pg_aux,pg_aux_w01,pg_h,pg_ch,"
+            "pg_ch_w01_floor,l1."))
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -423,6 +454,19 @@ def main() -> None:
                 "--work-dir",
                 work_dir / "test_results")
             if not args.skip_diagnostic:
+                paired_args = []
+                if model_name.startswith("pg_"):
+                    reference_dir = (
+                        resolve_path(args.work_dir) / "r2" / "test_results")
+                    paired_args = [
+                        "--reference-predictions",
+                        reference_dir / "predictions.pkl",
+                        "--candidate-predictions",
+                        work_dir / "test_results" / "predictions.pkl",
+                        "--reference-test-metrics", "<r2-test-metrics.json>",
+                        "--candidate-test-metrics",
+                        "<candidate-test-metrics.json>",
+                    ]
                 print(
                     "DIAGNOSTIC",
                     sys.executable,
@@ -433,7 +477,8 @@ def main() -> None:
                     "--variant",
                     model_name,
                     "--output-dir",
-                    work_dir / "diagnostics")
+                    work_dir / "diagnostics",
+                    *paired_args)
         return
     for model_name in assigned:
         run_job(model_name, args, dataset_out, image_dir)

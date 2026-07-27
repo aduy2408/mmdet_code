@@ -9,7 +9,9 @@ from mmengine.structures import InstanceData
 from mmdet.models.dense_heads import FCOSHead
 from mmdet.structures import DetDataSample
 from projects.rcfn_ltmr import LTMRFCOSHead, PGRCFNFCOS, RCFNFPN
-from projects.rcfn_ltmr.tools.diagnose_ltmr import position_statistics
+from projects.rcfn_ltmr.tools.diagnose_ltmr import (
+    map_center_and_max3, paired_gate_rows, position_statistics,
+    summarize_paired_gates)
 
 
 def _head():
@@ -189,6 +191,47 @@ def test_rcfn_gate_modes_and_position_gradients():
     assert torch.isfinite(auxiliary.position_out_conv.weight.grad).all()
 
 
+def test_combined_gate_floor_equation_and_validation():
+    common = dict(
+        in_channels=[1, 2, 4, 8], out_channels=4, num_outs=5,
+        start_level=1, add_extra_convs='on_output',
+        gate_mode='contrast_position', predict_contrast=True)
+    raw = torch.tensor([0.0, 0.25, 1.0])
+    no_floor = RCFNFPN(**common, gate_floor=0.0)
+    floored = RCFNFPN(**common, gate_floor=0.1)
+    assert torch.equal(no_floor.floor_gate(raw), raw)
+    assert torch.allclose(
+        floored.floor_gate(raw), torch.tensor([0.1, 0.325, 1.0]))
+    assert floored.floor_gate(raw).min() == pytest.approx(0.1)
+    for invalid in (-0.01, 1.01):
+        with pytest.raises(ValueError, match=r'\[0, 1\]'):
+            RCFNFPN(**common, gate_floor=invalid)
+
+
+def test_combined_floor_changes_only_p3_by_exact_gate():
+    inputs = tuple(
+        torch.randn(1, channels, size, size)
+        for channels, size in zip((1, 2, 4, 8), (32, 16, 8, 4)))
+    common = dict(
+        in_channels=[1, 2, 4, 8], out_channels=4, num_outs=5,
+        start_level=1, add_extra_convs='on_output', gamma_init=1.0,
+        position_channels=2)
+    auxiliary = RCFNFPN(**common, gate_mode='none')
+    floored = RCFNFPN(
+        **common, gate_mode='contrast_position', predict_contrast=True,
+        gate_floor=0.1)
+    floored.load_state_dict(auxiliary.state_dict(), strict=False)
+    aux_out, _, _ = auxiliary.forward_with_position(inputs)
+    output, heatmap, contrast = floored.forward_with_position(inputs)
+    baseline = super(RCFNFPN, auxiliary).forward(inputs)
+    enhancement = aux_out[0] - baseline[0]
+    expected_gate = 0.1 + 0.9 * heatmap * contrast
+    assert torch.allclose(
+        output[0] - baseline[0], enhancement * expected_gate,
+        rtol=1e-4, atol=1e-5)
+    assert all(torch.equal(a, b) for a, b in zip(output[1:], baseline[1:]))
+
+
 def test_auxiliary_mode_matches_r2_features():
     inputs = tuple(
         torch.randn(1, channels, size, size)
@@ -244,8 +287,10 @@ def test_pg_rcfn_detector_loss_and_inference_without_gt():
         ('fcos_baseline.py', 'FCOS', 'FPN'),
         ('fcos_r2.py', 'FCOS', 'none'),
         ('fcos_pg_aux.py', 'PGRCFNFCOS', 'none'),
+        ('fcos_pg_aux_w01.py', 'PGRCFNFCOS', 'none'),
         ('fcos_pg_h.py', 'PGRCFNFCOS', 'position'),
         ('fcos_pg_ch.py', 'PGRCFNFCOS', 'contrast_position'),
+        ('fcos_pg_ch_w01_floor.py', 'PGRCFNFCOS', 'contrast_position'),
     ])
 def test_tod_configs_are_standalone_levir(
         name, detector_type, gate_mode):
@@ -271,6 +316,68 @@ def test_tod_configs_are_standalone_levir(
     assert resize.scale == (512, 512)
     assert cfg.val_evaluator.type == 'CocoMetric'
     assert cfg.test_evaluator.type == 'CocoMetric'
+    if name == 'fcos_pg_aux_w01.py':
+        assert cfg.model.loss_pos_weight == pytest.approx(0.1)
+    if name == 'fcos_pg_ch_w01_floor.py':
+        assert cfg.model.loss_pos_weight == pytest.approx(0.1)
+        assert cfg.model.neck.gate_floor == pytest.approx(0.1)
+
+
+def _prediction(boxes, scores=None):
+    count = len(boxes)
+    return {
+        'bboxes': torch.tensor(boxes, dtype=torch.float32).reshape(-1, 4),
+        'scores': torch.tensor(
+            scores if scores is not None else [0.9] * count),
+        'labels': torch.zeros(count, dtype=torch.long),
+    }
+
+
+def test_paired_gate_groups_original_coordinates_and_summary():
+    detector = _position_detector()
+
+    class Floor(nn.Module):
+        gate_floor = 0.1
+
+        def floor_gate(self, gate):
+            return self.gate_floor + (1 - self.gate_floor) * gate
+
+    detector.neck = Floor()
+    sample = _sample(
+        [[0, 0, 16, 16], [24, 0, 40, 16], [48, 0, 64, 16],
+         [72, 0, 88, 16]],
+        img_shape=(32, 128), ori_shape=(16, 64), scale_factor=(2.0, 2.0),
+        img_id=7)
+    reference = _prediction([
+        [0, 0, 8, 8], [12, 0, 20, 8], [100, 100, 108, 108]])
+    candidate = _prediction([
+        [0, 0, 8, 8], [24, 0, 32, 8], [110, 110, 118, 118]])
+    position = torch.zeros(4, 16)
+    contrast = torch.full((4, 16), 0.5)
+    position[1, 1] = 0.4
+    rows, reference_fp, candidate_fp = paired_gate_rows(
+        detector, sample, position, contrast, reference, candidate)
+    assert [row['group'] for row in rows] == [
+        'retained', 'lost', 'gained', 'r2_miss']
+    assert reference_fp == candidate_fp == 1
+    assert rows[0]['hc_center'] == pytest.approx(0.2)
+    assert rows[0]['gate_center'] == pytest.approx(0.28)
+
+    summary = summarize_paired_gates(
+        rows, reference_fp=5, candidate_fp=4,
+        reference_map=0.25, candidate_map=0.249)
+    assert summary['groups'] == {
+        'retained': 1, 'lost': 1, 'gained': 1, 'r2_miss': 1}
+    assert summary['by_group']['retained']['gate_center']['mean'] == (
+        pytest.approx(0.28))
+    assert summary['acceptance']['accepted']
+
+
+def test_map_center_and_max3_clips_at_image_border():
+    feature = torch.tensor([[9.0, 2.0], [3.0, 4.0]])
+    center, maximum = map_center_and_max3(feature, -2, -3)
+    assert center == 9.0
+    assert maximum == 9.0
 
 
 def test_assignment_background_overlap_and_empty_gt():

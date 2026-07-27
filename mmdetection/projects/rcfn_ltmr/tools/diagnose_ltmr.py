@@ -4,7 +4,9 @@
 import argparse
 import csv
 import json
+import pickle
 import sys
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -157,6 +159,191 @@ def save_position_overlay(position, target, output_path):
         resample=Image.Resampling.NEAREST).save(output_path)
 
 
+def prediction_index(path):
+    """Load dumped MMDetection predictions keyed by image id."""
+    with Path(path).open('rb') as handle:
+        predictions = pickle.load(handle)
+    return {int(item['img_id']): item['pred_instances']
+            for item in predictions}
+
+
+def boxes_to_original(boxes, metainfo):
+    """Map transformed GT boxes back to original-image coordinates."""
+    scale_factor = metainfo.get('scale_factor')
+    if scale_factor is None:
+        img_shape = metainfo.get('img_shape')
+        ori_shape = metainfo.get('ori_shape')
+        scale_factor = (
+            (img_shape[1] / ori_shape[1], img_shape[0] / ori_shape[0])
+            if img_shape is not None and ori_shape is not None else (1.0, 1.0))
+    scale = boxes.new_tensor(scale_factor).flatten()[:2]
+    if scale.numel() != 2 or bool((scale <= 0).any()):
+        raise ValueError(
+            'scale_factor must contain positive (width, height) scales')
+    return boxes / scale.repeat(2)
+
+
+def match_predictions(
+        gt_boxes, gt_labels, prediction, score_threshold=0.05,
+        iou_threshold=0.5):
+    """Greedily match score-sorted predictions to GT boxes."""
+    matched = torch.zeros(
+        len(gt_boxes), dtype=torch.bool, device=gt_boxes.device)
+    used = set()
+    false_positives = 0
+    scores = prediction['scores']
+    order = scores.argsort(descending=True)
+    pred_boxes = prediction['bboxes'].to(gt_boxes)
+    pred_labels = prediction['labels'].to(gt_labels.device)
+    for pred_index in order.tolist():
+        if float(scores[pred_index]) < score_threshold:
+            continue
+        box = pred_boxes[pred_index]
+        candidates = (
+            (gt_labels == pred_labels[pred_index]).nonzero().flatten().tolist())
+        candidates = [index for index in candidates if index not in used]
+        best_iou, best_index = 0.0, -1
+        for gt_index in candidates:
+            gt = gt_boxes[gt_index]
+            top_left = torch.maximum(box[:2], gt[:2])
+            bottom_right = torch.minimum(box[2:], gt[2:])
+            intersection = (
+                bottom_right - top_left).clamp_min(0).prod()
+            union = (
+                (box[2:] - box[:2]).clamp_min(0).prod()
+                + (gt[2:] - gt[:2]).clamp_min(0).prod()
+                - intersection)
+            overlap = float(intersection / union.clamp_min(1e-9))
+            if overlap > best_iou:
+                best_iou, best_index = overlap, gt_index
+        if best_iou >= iou_threshold:
+            used.add(best_index)
+            matched[best_index] = True
+        else:
+            false_positives += 1
+    return matched, false_positives
+
+
+def map_center_and_max3(feature_map, center_x, center_y):
+    """Sample a map at the rounded center and in its clipped 3x3 window."""
+    height, width = feature_map.shape[-2:]
+    x = int(round(float(center_x)))
+    y = int(round(float(center_y)))
+    x = min(max(x, 0), width - 1)
+    y = min(max(y, 0), height - 1)
+    patch = feature_map[
+        max(0, y - 1):min(height, y + 2),
+        max(0, x - 1):min(width, x + 2)]
+    return float(feature_map[y, x]), float(patch.max())
+
+
+def paired_gate_rows(
+        model, sample, position, contrast, reference_prediction,
+        candidate_prediction, score_threshold=0.05, iou_threshold=0.5):
+    """Return per-tiny-GT gate rows and prediction false positives."""
+    boxes = sample.gt_instances.bboxes
+    boxes = boxes.tensor if hasattr(boxes, 'tensor') else boxes
+    labels = sample.gt_instances.labels
+    original_boxes = boxes_to_original(boxes, sample.metainfo)
+    reference_matches, reference_fp = match_predictions(
+        original_boxes, labels, reference_prediction,
+        score_threshold, iou_threshold)
+    candidate_matches, candidate_fp = match_predictions(
+        original_boxes, labels, candidate_prediction,
+        score_threshold, iou_threshold)
+    tiny = model.tiny_mask(boxes, sample.metainfo)
+    rows = []
+    for gt_index in tiny.nonzero().flatten().tolist():
+        reference_hit = bool(reference_matches[gt_index])
+        candidate_hit = bool(candidate_matches[gt_index])
+        if reference_hit and candidate_hit:
+            group = 'retained'
+        elif reference_hit:
+            group = 'lost'
+        elif candidate_hit:
+            group = 'gained'
+        else:
+            group = 'r2_miss'
+        box = boxes[gt_index]
+        center_x = (box[0] + box[2]) / (2 * model.position_stride)
+        center_y = (box[1] + box[3]) / (2 * model.position_stride)
+        h_center, h_max3 = map_center_and_max3(
+            position, center_x, center_y)
+        row = {
+            'img_id': sample.metainfo.get('img_id', ''),
+            'gt_index': gt_index,
+            'group': group,
+            'h_center': h_center,
+            'h_max3': h_max3,
+            'c_center': None,
+            'c_max3': None,
+            'hc_center': None,
+            'hc_max3': None,
+            'gate_center': 1.0,
+            'gate_max3': 1.0,
+        }
+        if contrast is not None:
+            c_center, c_max3 = map_center_and_max3(
+                contrast, center_x, center_y)
+            combined = position * contrast
+            hc_center, hc_max3 = map_center_and_max3(
+                combined, center_x, center_y)
+            final_gate = model.neck.floor_gate(combined)
+            gate_center, gate_max3 = map_center_and_max3(
+                final_gate, center_x, center_y)
+            row.update(
+                c_center=c_center, c_max3=c_max3,
+                hc_center=hc_center, hc_max3=hc_max3,
+                gate_center=gate_center, gate_max3=gate_max3)
+        rows.append(row)
+    return rows, reference_fp, candidate_fp
+
+
+def summarize_paired_gates(
+        rows, reference_fp, candidate_fp, reference_map=None,
+        candidate_map=None, max_map_drop=0.005):
+    """Aggregate paired groups and evaluate the decision criteria."""
+    fields = (
+        'h_center', 'h_max3', 'c_center', 'c_max3', 'hc_center',
+        'hc_max3', 'gate_center', 'gate_max3')
+    summary = {
+        'count': len(rows),
+        'groups': dict(Counter(row['group'] for row in rows)),
+        'reference_false_positives': reference_fp,
+        'candidate_false_positives': candidate_fp,
+        'by_group': {},
+    }
+    for group in ('retained', 'lost', 'r2_miss', 'gained'):
+        selected = [row for row in rows if row['group'] == group]
+        metrics = {'count': len(selected)}
+        for field in fields:
+            values = [
+                row[field] for row in selected if row[field] is not None]
+            if values:
+                metrics[field] = {
+                    'mean': float(np.mean(values)),
+                    'median': float(np.median(values)),
+                }
+        summary['by_group'][group] = metrics
+    map_ok = None
+    if reference_map is not None and candidate_map is not None:
+        map_ok = candidate_map >= reference_map - max_map_drop
+    checks = {
+        'tiny_lost_le_3': summary['groups'].get('lost', 0) <= 3,
+        'candidate_fp_below_r2': candidate_fp < reference_fp,
+        'map_not_materially_lower': map_ok,
+    }
+    available = [value for value in checks.values() if value is not None]
+    summary['acceptance'] = {
+        **checks,
+        'accepted': all(available) if len(available) == 3 else None,
+        'reference_map': reference_map,
+        'candidate_map': candidate_map,
+        'max_map_drop': max_map_drop,
+    }
+    return summary
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('config', type=Path)
@@ -168,10 +355,26 @@ def main():
     parser.add_argument('--max-images', type=int, default=0)
     parser.add_argument(
         '--variant',
-        choices=('baseline', 'r2', 'pg_aux', 'pg_h', 'pg_ch', 'l1'),
+        choices=(
+            'baseline', 'r2', 'pg_aux', 'pg_aux_w01', 'pg_h', 'pg_ch',
+            'pg_ch_w01_floor', 'l1'),
         default='baseline')
     parser.add_argument('--max-position-maps', type=int, default=16)
+    parser.add_argument('--reference-predictions', type=Path)
+    parser.add_argument('--candidate-predictions', type=Path)
+    parser.add_argument('--reference-test-metrics', type=Path)
+    parser.add_argument('--candidate-test-metrics', type=Path)
+    parser.add_argument('--match-iou-threshold', type=float, default=0.5)
+    parser.add_argument('--max-map-drop', type=float, default=0.005)
     args = parser.parse_args()
+    if bool(args.reference_predictions) != bool(args.candidate_predictions):
+        parser.error(
+            '--reference-predictions and --candidate-predictions '
+            'must be provided together')
+    if bool(args.reference_test_metrics) != bool(args.candidate_test_metrics):
+        parser.error(
+            '--reference-test-metrics and --candidate-test-metrics '
+            'must be provided together')
 
     register_all_modules()
     cfg = Config.fromfile(args.config)
@@ -203,6 +406,15 @@ def main():
     }
     map_count = 0
     map_dir = args.output_dir / 'position_maps'
+    paired_rows = []
+    reference_fp = 0
+    candidate_fp = 0
+    reference_predictions = (
+        prediction_index(args.reference_predictions)
+        if args.reference_predictions else None)
+    candidate_predictions = (
+        prediction_index(args.candidate_predictions)
+        if args.candidate_predictions else None)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with torch.inference_mode():
         for batch_index, data_batch in enumerate(runner.test_dataloader):
@@ -210,7 +422,7 @@ def main():
                 break
             data = model.data_preprocessor(data_batch, training=False)
             if hasattr(diagnostic_model, 'position_maps'):
-                features, position, _ = diagnostic_model.position_maps(
+                features, position, contrast = diagnostic_model.position_maps(
                     data['inputs'])
                 target, stats = position_statistics(
                     diagnostic_model, position, data['data_samples'])
@@ -227,6 +439,26 @@ def main():
                         position[index, 0], target[index, 0],
                         map_dir / f'{map_count:04d}.png')
                     map_count += 1
+                if reference_predictions is not None:
+                    for index, sample in enumerate(data['data_samples']):
+                        img_id = int(sample.metainfo['img_id'])
+                        if (img_id not in reference_predictions
+                                or img_id not in candidate_predictions):
+                            raise KeyError(
+                                f'Missing paired prediction for img_id={img_id}')
+                        image_rows, ref_count, candidate_count = (
+                            paired_gate_rows(
+                                diagnostic_model, sample,
+                                position[index, 0],
+                                contrast[index, 0]
+                                if contrast is not None else None,
+                                reference_predictions[img_id],
+                                candidate_predictions[img_id],
+                                args.score_threshold,
+                                args.match_iou_threshold))
+                        paired_rows.extend(image_rows)
+                        reference_fp += ref_count
+                        candidate_fp += candidate_count
             else:
                 features = model.extract_feat(data['inputs'])
             cls_scores = diagnostic_model.bbox_head(features)[0]
@@ -262,6 +494,30 @@ def main():
             'saved_maps': map_count,
             'overlay_channels': {'red': 'target', 'green': 'prediction'},
         }
+    if reference_predictions is not None:
+        paired_csv = args.output_dir / 'paired_gate_gt.csv'
+        if paired_rows:
+            with paired_csv.open(
+                    'w', newline='', encoding='utf-8') as handle:
+                writer = csv.DictWriter(
+                    handle, fieldnames=paired_rows[0].keys())
+                writer.writeheader()
+                writer.writerows(paired_rows)
+
+        def read_map(path):
+            if path is None:
+                return None
+            return float(json.loads(
+                path.read_text(encoding='utf-8'))['coco/bbox_mAP'])
+
+        paired_summary = summarize_paired_gates(
+            paired_rows, reference_fp, candidate_fp,
+            read_map(args.reference_test_metrics),
+            read_map(args.candidate_test_metrics),
+            args.max_map_drop)
+        (args.output_dir / 'paired_gate_summary.json').write_text(
+            json.dumps(paired_summary, indent=2), encoding='utf-8')
+        summary['paired_gate'] = paired_summary
     (args.output_dir / 'summary.json').write_text(
         json.dumps(summary, indent=2), encoding='utf-8')
     print(json.dumps(summary, indent=2))

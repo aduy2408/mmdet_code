@@ -14,16 +14,20 @@ class RCFNFPN(FPN):
     def __init__(self, *args, eps: float = 1e-4,
                  gamma_init: float = 0.0, position_channels: int = 64,
                  gate_mode: str = 'none',
-                 predict_contrast: bool = False, **kwargs) -> None:
+                 predict_contrast: bool = False,
+                 gate_floor: float = 0.0, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         if gate_mode not in {'none', 'position', 'contrast_position'}:
             raise ValueError(f'Unsupported gate_mode: {gate_mode}')
         if gate_mode == 'contrast_position' and not predict_contrast:
             raise ValueError(
                 'contrast_position gate requires predict_contrast=True')
+        if not 0 <= gate_floor <= 1:
+            raise ValueError('gate_floor must be in [0, 1]')
         self.eps = eps
         self.gate_mode = gate_mode
         self.predict_contrast = predict_contrast
+        self.gate_floor = gate_floor
         channels = self.out_channels
         self.dw_conv = nn.Conv2d(
             channels, channels, 3, padding=1, groups=channels)
@@ -67,6 +71,10 @@ class RCFNFPN(FPN):
         deviation = (feature.float() - mean) * torch.rsqrt(var)
         return deviation.to(feature.dtype)
 
+    def floor_gate(self, gate: Tensor) -> Tensor:
+        """Keep a minimum fraction of the learned RCFN enhancement."""
+        return self.gate_floor + (1 - self.gate_floor) * gate
+
     def forward_with_position(
             self, inputs: tuple[Tensor]
     ) -> tuple[tuple[Tensor, ...], Tensor, Tensor | None]:
@@ -89,9 +97,9 @@ class RCFNFPN(FPN):
             if self.contrast_conv is not None else None)
         gate = 1
         if self.gate_mode == 'position':
-            gate = position
+            gate = self.floor_gate(position)
         elif self.gate_mode == 'contrast_position':
-            gate = position * contrast
+            gate = self.floor_gate(position * contrast)
         outs[0] = (
             outs[0]
             + self.gamma.view(1, -1, 1, 1) * gate * enhancement
