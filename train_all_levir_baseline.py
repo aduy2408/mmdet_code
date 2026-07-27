@@ -23,6 +23,7 @@ MODEL_CONFIGS = {
     "retinanet": "configs/retinanet/retinanet_r50_fpn_1x_coco.py",
     "faster_rcnn": "configs/faster_rcnn/faster-rcnn_r50_fpn_1x_coco.py",
     "fcos": "configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py",
+    "pahr": "projects/pahr/configs/fcos_pahr.py",
 }
 SPLIT_RATIOS = {"train": 0.70, "val": 0.15, "test": 0.15}
 SCENE_RE = re.compile(r"^(.*)_(-?\d+)_(-?\d+)$")
@@ -391,7 +392,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--models",
         default="atss,retinanet,faster_rcnn,fcos",
-        help="Comma-separated: atss, retinanet, faster_rcnn, fcos.",
+        help="Comma-separated: atss, retinanet, faster_rcnn, fcos, pahr.",
     )
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=4)
