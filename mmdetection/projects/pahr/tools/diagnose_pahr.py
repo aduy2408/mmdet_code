@@ -84,7 +84,8 @@ def main() -> None:
 
     summary = {
         'images': rows,
-        'detail_scales': model.neck.detail_scales.detach().cpu().tolist(),
+        'detail_output_weight_norm': float(
+            model.neck.detail_mixer[-1].weight.detach().norm()),
     }
     (output_dir / 'summary.json').write_text(
         json.dumps(summary, indent=2), encoding='utf-8')

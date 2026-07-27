@@ -18,4 +18,5 @@ model = dict(
     tiny_max_sqrt_area=16.0,
     position_stride=8,
     loss_pos_weight=0.1,
-    loss_offset_weight=0.1)
+    loss_offset_weight=0.1,
+    use_phase_shift=False)

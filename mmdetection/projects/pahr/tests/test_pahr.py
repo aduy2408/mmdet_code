@@ -32,7 +32,7 @@ def neck(**kwargs):
         **kwargs)
 
 
-def detector():
+def detector(use_phase_shift=False, norm_on_bbox=False):
     return PAHRFCOS(
         backbone=dict(
             type='ResNet',
@@ -59,7 +59,9 @@ def detector():
             feat_channels=32,
             stacked_convs=1,
             norm_cfg=None,
+            norm_on_bbox=norm_on_bbox,
             strides=[8, 16, 32, 64, 128]),
+        use_phase_shift=use_phase_shift,
         test_cfg=ConfigDict(
             nms_pre=100,
             score_thr=0.05,
@@ -81,6 +83,9 @@ def test_haar_round_trip_signed_and_odd_validation():
 
 def test_zero_init_is_exact_fpn_and_only_p3_changes():
     module = neck()
+    module.init_weights()
+    assert torch.count_nonzero(module.detail_mixer[-1].weight) == 0
+    assert torch.count_nonzero(module.detail_mixer[-1].bias) == 0
     inputs = tuple(
         torch.randn(1, channels, size, size)
         for channels, size in zip((1, 2, 4, 8), (32, 16, 8, 4)))
@@ -92,26 +97,88 @@ def test_zero_init_is_exact_fpn_and_only_p3_changes():
     assert aux['offsets'].shape == (1, 2, 16, 16)
     assert ((aux['offsets'] >= 0) & (aux['offsets'] <= 1)).all()
 
-    module.detail_scales.data.fill_(1)
+    module.detail_mixer[-1].bias.data.fill_(0.1)
     changed, _ = module.forward_with_aux(inputs)
     assert not torch.equal(changed[0], baseline[0])
     assert all(torch.equal(left, right)
                for left, right in zip(changed[1:], baseline[1:]))
 
 
-def test_scale_then_mixer_gradients_are_finite():
+def test_output_conv_gets_gradient_at_identity_init():
     module = neck()
     p3 = torch.randn(1, 4, 8, 8, requires_grad=True)
     output, aux = module.recompose(p3)
     (output.square().mean() + aux['position_logits'].square().mean()).backward()
-    assert torch.isfinite(module.detail_scales.grad).all()
+    output_conv = module.detail_mixer[-1]
+    assert output_conv.weight.grad is not None
+    assert torch.isfinite(output_conv.weight.grad).all()
+    assert output_conv.weight.grad.abs().sum() > 0
     assert module.locator[-1].weight.grad is not None
 
+    with torch.no_grad():
+        output_conv.weight.add_(output_conv.weight.grad, alpha=-0.01)
     module.zero_grad(set_to_none=True)
-    module.detail_scales.data.fill_(0.1)
-    module.recompose(p3.detach())[0].square().mean().backward()
-    assert module.detail_mixer[-1].weight.grad is not None
-    assert torch.isfinite(module.detail_mixer[-1].weight.grad).all()
+    changed, _ = module.recompose(p3.detach())
+    assert not torch.equal(changed, p3.detach())
+    changed.square().mean().backward()
+    assert module.detail_mixer[0].weight.grad is not None
+    assert torch.isfinite(module.detail_mixer[0].weight.grad).all()
+
+
+def test_offset_context_is_position_gated():
+    module = neck()
+    p3 = torch.randn(1, 4, 8, 8)
+    captured = {}
+
+    def capture(_, inputs):
+        captured['input'] = inputs[0].detach()
+
+    handle = module.detail_mixer.register_forward_pre_hook(capture)
+    _, aux = module.recompose(p3)
+    handle.remove()
+    context = captured['input'][:, -12:]
+    packed = torch.nn.functional.pixel_unshuffle(
+        torch.cat((
+            aux['position_logits'].sigmoid(),
+            aux['position_logits'].sigmoid() * aux['offsets']), dim=1), 2)
+    assert torch.equal(context, packed)
+
+
+def test_phase_shift_algebra_and_level_isolation():
+    model = detector(use_phase_shift=True)
+    bbox_preds = [
+        torch.full((1, 4, 2, 2), 10.0),
+        torch.full((1, 4, 1, 1), 20.0),
+    ]
+    aux = dict(
+        position_logits=torch.zeros(1, 1, 2, 2),
+        offsets=torch.cat((
+            torch.ones(1, 1, 2, 2),
+            torch.zeros(1, 1, 2, 2)), dim=1))
+    adjusted = model.phase_adjust_bbox_preds(bbox_preds, aux)
+    expected = torch.tensor([8.0, 12.0, 12.0, 8.0]).view(1, 4, 1, 1)
+    assert torch.equal(adjusted[0], expected.expand_as(adjusted[0]))
+    assert torch.equal(adjusted[1], bbox_preds[1])
+
+    model.use_phase_shift = False
+    unshifted = model.phase_adjust_bbox_preds(bbox_preds, aux)
+    assert torch.equal(unshifted[0], bbox_preds[0])
+
+    normalized = detector(use_phase_shift=True, norm_on_bbox=True)
+    normalized.train()
+    adjusted = normalized.phase_adjust_bbox_preds(bbox_preds, aux)
+    expected = torch.tensor([9.75, 10.25, 10.25, 9.75]).view(
+        1, 4, 1, 1)
+    assert torch.equal(adjusted[0], expected.expand_as(adjusted[0]))
+
+
+@pytest.mark.parametrize('size', [64, 96])
+def test_p3_sizes_for_512_and_768_are_supported(size):
+    module = neck()
+    p3 = torch.randn(1, 4, size, size)
+    output, aux = module.recompose(p3)
+    assert output.shape == p3.shape
+    assert aux['position_logits'].shape[-2:] == (size, size)
 
 
 def test_targets_resize_padding_ignore_collision_and_empty():
@@ -147,8 +214,9 @@ def test_targets_resize_padding_ignore_collision_and_empty():
     assert all(torch.isfinite(loss) for loss in losses.values())
 
 
-def test_detector_loss_predict_and_config():
-    model = detector()
+@pytest.mark.parametrize('use_phase_shift', [False, True])
+def test_detector_loss_predict_and_config(use_phase_shift):
+    model = detector(use_phase_shift=use_phase_shift)
     inputs = torch.randn(1, 3, 64, 64)
     train_sample = sample(
         [[8, 8, 16, 16]],

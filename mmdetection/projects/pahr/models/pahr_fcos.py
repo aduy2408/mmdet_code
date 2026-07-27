@@ -8,8 +8,9 @@ from torch import Tensor
 
 from mmdet.models.detectors import FCOS
 from mmdet.models.losses import GaussianFocalLoss
+from mmdet.models.utils import unpack_gt_instances
 from mmdet.registry import MODELS
-from mmdet.structures import SampleList
+from mmdet.structures import OptSampleList, SampleList
 
 
 def _box_tensor(boxes) -> Tensor:
@@ -26,6 +27,7 @@ class PAHRFCOS(FCOS):
                  position_stride: int = 8,
                  loss_pos_weight: float = 0.1,
                  loss_offset_weight: float = 0.1,
+                 use_phase_shift: bool = False,
                  **kwargs) -> None:
         super().__init__(*args, **kwargs)
         if not hasattr(self.neck, 'forward_with_aux'):
@@ -34,6 +36,7 @@ class PAHRFCOS(FCOS):
         self.position_stride = int(position_stride)
         self.loss_pos_weight = float(loss_pos_weight)
         self.loss_offset_weight = float(loss_offset_weight)
+        self.use_phase_shift = bool(use_phase_shift)
         self.position_loss_module = GaussianFocalLoss(reduction='mean')
 
     def tiny_mask(self, boxes: Tensor, metainfo: dict) -> Tensor:
@@ -153,13 +156,66 @@ class PAHRFCOS(FCOS):
             loss_pos=loss_position * self.loss_pos_weight,
             loss_offset=loss_offset * self.loss_offset_weight)
 
+    def phase_adjust_bbox_preds(
+            self, bbox_preds: list[Tensor],
+            aux: dict[str, Tensor]) -> list[Tensor]:
+        """Shift P3 boxes toward the fractional center predicted by PAHR."""
+        adjusted = list(bbox_preds)
+        if not self.use_phase_shift:
+            return adjusted
+        position = aux['position_logits'].sigmoid()
+        offsets = aux['offsets']
+        shift_scale = float(self.position_stride)
+        if self.bbox_head.norm_on_bbox and self.training:
+            shift_scale = 1.0
+        dx = position * (offsets[:, 0:1] - 0.5) * shift_scale
+        dy = position * (offsets[:, 1:2] - 0.5) * shift_scale
+        left, top, right, bottom = adjusted[0].chunk(4, dim=1)
+        adjusted[0] = torch.cat(
+            (left - dx, top - dy, right + dx, bottom + dy),
+            dim=1).clamp_min(0)
+        return adjusted
+
+    def bbox_outputs(
+            self, features: tuple[Tensor, ...],
+            aux: dict[str, Tensor]
+    ) -> tuple[list[Tensor], list[Tensor], list[Tensor]]:
+        cls_scores, bbox_preds, centernesses = self.bbox_head(features)
+        bbox_preds = self.phase_adjust_bbox_preds(bbox_preds, aux)
+        return cls_scores, bbox_preds, centernesses
+
     def loss(self, batch_inputs: Tensor,
              batch_data_samples: SampleList) -> dict[str, Tensor]:
         backbone_features = self.backbone(batch_inputs)
         features, aux = self.neck.forward_with_aux(backbone_features)
-        losses = self.bbox_head.loss(features, batch_data_samples)
+        outputs = self.bbox_outputs(features, aux)
+        gt_instances, ignored_instances, image_metas = unpack_gt_instances(
+            batch_data_samples)
+        losses = self.bbox_head.loss_by_feat(
+            *outputs, gt_instances, image_metas, ignored_instances)
         losses.update(self.auxiliary_losses(aux, batch_data_samples))
         return losses
+
+    def predict(self,
+                batch_inputs: Tensor,
+                batch_data_samples: SampleList,
+                rescale: bool = True) -> SampleList:
+        backbone_features = self.backbone(batch_inputs)
+        features, aux = self.neck.forward_with_aux(backbone_features)
+        outputs = self.bbox_outputs(features, aux)
+        image_metas = [sample.metainfo for sample in batch_data_samples]
+        results = self.bbox_head.predict_by_feat(
+            *outputs,
+            batch_img_metas=image_metas,
+            rescale=rescale)
+        return self.add_pred_to_datasample(batch_data_samples, results)
+
+    def _forward(self,
+                 batch_inputs: Tensor,
+                 batch_data_samples: OptSampleList = None):
+        backbone_features = self.backbone(batch_inputs)
+        features, aux = self.neck.forward_with_aux(backbone_features)
+        return self.bbox_outputs(features, aux)
 
     def position_maps(
             self, batch_inputs: Tensor

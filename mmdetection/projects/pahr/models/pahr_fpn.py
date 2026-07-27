@@ -45,8 +45,19 @@ class PAHRFPN(FPN):
             nn.SiLU(inplace=True),
             nn.Conv2d(detail_channels, 3 * channels, 1),
         )
-        self.detail_scales = nn.Parameter(torch.zeros(3))
-        nn.init.constant_(self.locator[-1].bias[:4], -2.19)
+        self._init_pahr_outputs()
+
+    def _init_pahr_outputs(self) -> None:
+        """Keep PAHR identity-initialized without blocking output gradients."""
+        nn.init.zeros_(self.detail_mixer[-1].weight)
+        nn.init.zeros_(self.detail_mixer[-1].bias)
+        with torch.no_grad():
+            self.locator[-1].bias[:4].fill_(-2.19)
+
+    def init_weights(self) -> None:
+        super().init_weights()
+        # FPN's init_cfg initializes every Conv2d, including PAHR layers.
+        self._init_pahr_outputs()
 
     @staticmethod
     def haar(feature: Tensor) -> tuple[Tensor, Tensor, Tensor, Tensor]:
@@ -91,20 +102,16 @@ class PAHRFPN(FPN):
         offsets = phase[:, 1:].sigmoid()
         position = position_logits.sigmoid()
         phase_context = F.pixel_unshuffle(
-            torch.cat((position, offsets), dim=1), 2)
+            torch.cat((position, position * offsets), dim=1), 2)
 
         residuals = self.detail_mixer(
             torch.cat((*bands, phase_context), dim=1)).chunk(3, dim=1)
-        detail_corrections = tuple(
-            scale.to(dtype=residual.dtype) * residual
-            for residual, scale in zip(residuals, self.detail_scales))
         correction = self.inverse_haar(
-            torch.zeros_like(bands[0]), *detail_corrections)
+            torch.zeros_like(bands[0]), *residuals)
         output = p3 + position * correction
         aux = dict(
             position_logits=position_logits,
             offsets=offsets,
-            detail_scales=self.detail_scales,
         )
         return output, aux
 
