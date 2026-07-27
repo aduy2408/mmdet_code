@@ -56,6 +56,14 @@ VARIANTS = {
         use_output_gate=False,
         guide_channels=16,
         detail_lr_mult=10.0),
+    'haar_v5_measure_768': dict(
+        image_size=768,
+        phase_shift=False,
+        giou=False,
+        scaled_schedule=True,
+        use_output_gate=False,
+        guide_channels=16,
+        use_tiny_measurement=True),
 }
 
 
@@ -148,6 +156,8 @@ def write_variant_config(variant: str, args: argparse.Namespace,
             cfg.train_dataloader, cfg.val_dataloader, cfg.test_dataloader):
         set_resize_scale(dataloader.dataset.pipeline, image_size)
     cfg.model.use_phase_shift = settings['phase_shift']
+    cfg.model.use_tiny_measurement = settings.get(
+        'use_tiny_measurement', False)
     if settings.get('v3_gate'):
         cfg.model.neck.update(
             gate_power=0.5,
@@ -181,6 +191,7 @@ def write_variant_config(variant: str, args: argparse.Namespace,
         guide_channels=settings.get('guide_channels', 0),
         use_output_gate=settings.get('use_output_gate', True),
         correction_gain=1.0,
+        use_tiny_measurement=settings.get('use_tiny_measurement', False),
         detail_lr_mult=settings.get('detail_lr_mult', 1.0))
     output = Path(cfg.work_dir) / 'patched_config.py'
     output.parent.mkdir(parents=True, exist_ok=True)

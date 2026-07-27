@@ -89,7 +89,7 @@ def tiny_statistics(annotation_path: Path, prediction_path: Path,
                     float(torch.linalg.vector_norm(
                         predicted_center - gt_center)))
     errors = torch.tensor(center_errors)
-    return {
+    statistics = {
         'tiny_gt': tiny_count,
         'tiny_recall_50': matched_50 / max(tiny_count, 1),
         'tiny_recall_75': matched_75 / max(tiny_count, 1),
@@ -142,6 +142,28 @@ def correction_statistics(config: Config, checkpoint: str,
         'detail_output_weight_norm': float(
             detail_output.weight.detach().norm()),
     }
+    if 'measurement_phase_logits' in aux:
+        phase_probability = aux['measurement_phase_logits'].softmax(dim=1)
+        targets = model.measurement_targets(aux, batch['data_samples'])
+        _, _, _, size_target, size_valid = targets
+        predicted_sizes = aux['measurement_log_sizes'].exp() * 2
+        target_sizes = size_target.exp() * 2
+        size_mask = size_valid.expand_as(predicted_sizes)
+        statistics.update(
+            measurement_center_mean=float(
+                aux['measurement_center_logits'].sigmoid().mean()),
+            measurement_center_max=float(
+                aux['measurement_center_logits'].sigmoid().max()),
+            measurement_phase_entropy=float(
+                -(phase_probability * phase_probability.clamp_min(
+                    1e-12).log()).sum(dim=1).mean()),
+            measurement_size_mae_px=(
+                float((predicted_sizes[size_mask]
+                       - target_sizes[size_mask]).abs().mean())
+                if size_mask.any() else None),
+            measurement_refine_scale=float(
+                model.measurement_refine_scale.tanh()))
+    return statistics
 
 
 def main() -> None:

@@ -79,6 +79,9 @@ def main() -> None:
             'offset_y': offsets[1],
             'target': target[0, 0],
         }
+        if 'measurement_center_logits' in aux:
+            maps['measurement_center'] = (
+                aux['measurement_center_logits'][0, 0].sigmoid())
         for name, tensor in maps.items():
             cv2.imwrite(
                 str(output_dir / f'{index:04d}_{name}.png'),
@@ -103,6 +106,19 @@ def main() -> None:
             'applied_correction_rms': float(
                 aux['applied_correction_rms']),
         })
+        if 'measurement_phase_logits' in aux:
+            phase_probability = aux[
+                'measurement_phase_logits'].softmax(dim=1)
+            rows[-1].update(
+                measurement_center_mean=float(
+                    aux['measurement_center_logits'].sigmoid().mean()),
+                measurement_center_max=float(
+                    aux['measurement_center_logits'].sigmoid().max()),
+                measurement_phase_entropy=float(
+                    -(phase_probability * phase_probability.clamp_min(
+                        1e-12).log()).sum(dim=1).mean()),
+                measurement_refine_scale=float(
+                    model.measurement_refine_scale.tanh()))
 
     summary = {
         'images': rows,

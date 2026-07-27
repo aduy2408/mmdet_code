@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 import pytest
@@ -33,7 +34,11 @@ def neck(**kwargs):
         **kwargs)
 
 
-def detector(use_phase_shift=False, norm_on_bbox=False, guide_channels=0):
+def detector(
+        use_phase_shift=False,
+        norm_on_bbox=False,
+        guide_channels=0,
+        use_tiny_measurement=False):
     return PAHRFCOS(
         backbone=dict(
             type='ResNet',
@@ -55,6 +60,7 @@ def detector(use_phase_shift=False, norm_on_bbox=False, guide_channels=0):
             detail_channels=8,
             guide_channels=guide_channels,
             use_output_gate=not guide_channels),
+        use_tiny_measurement=use_tiny_measurement,
         bbox_head=dict(
             type='FCOSHead',
             num_classes=1,
@@ -230,6 +236,7 @@ def test_scaled_schedule():
     assert VARIANTS['haar_v3_gate_lr10_768']['detail_lr_mult'] == 10.0
     assert VARIANTS['haar_v4_c2_768']['guide_channels'] == 16
     assert not VARIANTS['haar_v4_ungated_768']['use_output_gate']
+    assert VARIANTS['haar_v5_measure_768']['use_tiny_measurement']
 
 
 def test_phase_shift_algebra_and_level_isolation():
@@ -326,6 +333,13 @@ def test_detector_loss_predict_and_config(use_phase_shift):
     with torch.inference_mode():
         predictions = model.predict(inputs, [predict_sample])
     assert len(predictions) == 1
+    assert 'pred_instances' in predictions[0]
+
+    config_path = Path(__file__).parents[1] / 'configs' / 'fcos_pahr.py'
+    config = Config.fromfile(config_path)
+    assert config.model.type == 'PAHRFCOS'
+    assert config.model.neck.type == 'PAHRFPN'
+    assert config.model.bbox_head.num_classes == 80
 
 
 def test_detector_c2_guidance_loss_and_predict():
@@ -343,10 +357,107 @@ def test_detector_c2_guidance_loss_and_predict():
     with torch.inference_mode():
         predictions = model.predict(inputs, [data_sample])
     assert len(predictions) == 1
-    assert 'pred_instances' in predictions[0]
 
-    config_path = Path(__file__).parents[1] / 'configs' / 'fcos_pahr.py'
-    config = Config.fromfile(config_path)
-    assert config.model.type == 'PAHRFCOS'
-    assert config.model.neck.type == 'PAHRFPN'
-    assert config.model.bbox_head.num_classes == 80
+
+@pytest.mark.parametrize('size', [64, 96])
+def test_measurement_shapes_neutral_refinement_and_gradients(size):
+    model = detector(use_tiny_measurement=True)
+    inputs = torch.randn(1, 3, size, size)
+    maps = model.measurement_maps(inputs)
+    assert maps['measurement_center_logits'].shape[-2:] == (
+        size // 2, size // 2)
+    assert maps['measurement_phase_logits'].shape == (
+        1, 16, size // 8, size // 8)
+    assert maps['measurement_log_sizes'].shape == (
+        1, 2, size // 8, size // 8)
+
+    bbox_preds = [
+        torch.full((1, 4, size // 8, size // 8), 10.0),
+        torch.full((1, 4, size // 16, size // 16), 20.0),
+    ]
+    neutral = model.measurement_adjust_bbox_preds(bbox_preds, maps)
+    assert torch.equal(neutral[0], bbox_preds[0])
+    assert torch.equal(neutral[1], bbox_preds[1])
+    with torch.no_grad():
+        model.measurement_refine_scale.fill_(10)
+        maps['measurement_center_logits'].fill_(100)
+        maps['measurement_phase_logits'].fill_(-100)
+        maps['measurement_phase_logits'][:, 15].fill_(100)
+        maps['measurement_log_sizes'].fill_(math.log(10))
+    refined = model.measurement_adjust_bbox_preds(bbox_preds, maps)
+    expected_shift = float(3 * torch.sigmoid(torch.tensor(2.0)))
+    expected = torch.tensor([
+        10 - expected_shift,
+        10 - expected_shift,
+        10 + expected_shift,
+        10 + expected_shift,
+    ]).view(1, 4, 1, 1)
+    assert torch.allclose(
+        refined[0], expected.expand_as(refined[0]), atol=1e-4)
+    assert torch.equal(refined[1], bbox_preds[1])
+
+    data_sample = sample(
+        [[8, 8, 16, 16]],
+        img_shape=(size, size),
+        ori_shape=(size, size),
+        scale_factor=(1.0, 1.0))
+    losses = model.measurement_losses(maps, [data_sample])
+    sum(losses.values()).backward()
+    assert model.measurement_stem[0].weight.grad is not None
+    assert model.measurement_center.weight.grad is not None
+    assert model.measurement_phase.weight.grad is not None
+    assert model.measurement_size.weight.grad is not None
+
+
+def test_detector_measurement_loss_predict_and_tensor_forward():
+    model = detector(use_tiny_measurement=True)
+    inputs = torch.randn(1, 3, 64, 64)
+    data_sample = sample(
+        [[8, 8, 16, 16]],
+        img_shape=(64, 64),
+        ori_shape=(64, 64),
+        scale_factor=(1.0, 1.0))
+    model.train()
+    losses = model.loss(inputs, [data_sample])
+    assert {
+        'loss_measure_center',
+        'loss_measure_phase',
+        'loss_measure_size',
+    } <= losses.keys()
+    assert all(torch.isfinite(loss) for loss in losses.values())
+    tensor_outputs = model._forward(inputs, [data_sample])
+    assert len(tensor_outputs) == 3
+    model.eval()
+    with torch.inference_mode():
+        predictions = model.predict(inputs, [data_sample])
+    assert len(predictions) == 1
+
+
+def test_measurement_targets_collision_ignore_empty_and_phase():
+    model = detector(use_tiny_measurement=True)
+    maps = model.measurement_maps(torch.randn(3, 3, 64, 64))
+    samples = [
+        sample(
+            [[8, 8, 16, 16], [10, 10, 14, 14]],
+            img_shape=(64, 64),
+            ori_shape=(64, 64),
+            scale_factor=(1.0, 1.0),
+            ignored=[[24, 24, 32, 32]]),
+        sample([[60, 60, 64, 64]], img_shape=(64, 64)),
+        sample([], img_shape=(48, 48)),
+    ]
+    center, center_valid, phase, sizes, size_valid = (
+        model.measurement_targets(maps, samples))
+    assert center.max() > 0
+    assert size_valid[0].sum() == 1
+    assert phase[0, 1, 1] == 10
+    assert not center_valid[0, 0, 12:16, 12:16].any()
+    assert phase[0, 3, 3] == -1
+    assert size_valid[1].sum() == 1
+    assert not center_valid[2, :, 24:].any()
+    losses = model.measurement_losses(maps, samples)
+    assert all(torch.isfinite(loss) for loss in losses.values())
+    empty_maps = model.measurement_maps(torch.randn(1, 3, 64, 64))
+    empty_losses = model.measurement_losses(
+        empty_maps, [sample([], img_shape=(64, 64))])
+    assert all(torch.isfinite(loss) for loss in empty_losses.values())
