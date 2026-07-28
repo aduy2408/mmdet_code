@@ -122,6 +122,9 @@ def correction_summary(config: Path, checkpoint: Path) -> dict | None:
     from mmdet.utils import register_all_modules
     from projects.pahr import PAHRFPN
 
+    # MMEngine checkpoints contain trusted HistoryBuffer objects, while
+    # PyTorch 2.6 defaults torch.load() to weights_only=True.
+    os.environ.setdefault('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', '1')
     cfg = Config.fromfile(str(config))
     if cfg.model.neck.type != 'PAHRFPN':
         return None
