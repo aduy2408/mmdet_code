@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import sys
 import time
@@ -104,6 +105,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--test-only', action='store_true')
     parser.add_argument('--pilot-calibrate', action='store_true')
+    parser.add_argument('--probe-only', action='store_true')
+    parser.add_argument('--diagnose-nonfinite', action='store_true')
+    parser.add_argument('--positive-only', action='store_true')
     parser.add_argument('--pilot-iters', type=int, default=300)
     parser.add_argument('--target-displacement', type=float, default=0.014)
     parser.add_argument(
@@ -142,7 +146,8 @@ def write_config(
     if gamma_max is not None:
         cfg.model.neck.gamma_max = gamma_max
     cfg = levir.patch_config(cfg, variant, args, dataset_out, image_dir)
-    cfg.train_dataloader.dataset.filter_cfg.filter_empty_gt = False
+    cfg.train_dataloader.dataset.filter_cfg.filter_empty_gt = (
+        args.positive_only)
     for dataloader in (
             cfg.train_dataloader, cfg.val_dataloader, cfg.test_dataloader):
         set_resize_scale(dataloader.dataset.pipeline, args.image_size)
@@ -152,14 +157,19 @@ def write_config(
             scheduler.milestones = [
                 round(args.epochs * 2 / 3),
                 round(args.epochs * 11 / 12)]
+    neck = cfg.model.neck
     cfg.dbss_experiment = dict(
         variant=variant,
-        selector_mode=cfg.model.neck.get('selector_mode'),
-        residual_mode=cfg.model.neck.get('residual_mode'),
-        gamma_max=cfg.model.neck.gamma_max,
+        selector_mode=neck.get('selector_mode'),
+        residual_mode=neck.get('residual_mode'),
+        gamma_max=neck.get('gamma_max'),
         image_size=args.image_size,
         feature_stride=8,
         seed=args.seed)
+    if args.diagnose_nonfinite:
+        cfg.custom_imports = dict(imports=['projects.dbss'])
+        cfg.custom_hooks = list(cfg.get('custom_hooks', []))
+        cfg.custom_hooks.append(dict(type='NonFiniteDiagnosticHook'))
     if pilot_round is not None:
         warmup = [
             scheduler for scheduler in cfg.param_scheduler
@@ -216,6 +226,21 @@ def recent_displacement(work_dir: Path, count: int = 50) -> float:
     return sum(values[-count:]) / min(count, len(values))
 
 
+def assert_finite_metrics(work_dir: Path) -> None:
+    for scalar_file in sorted(work_dir.glob('**/vis_data/scalars.json')):
+        for line_number, line in enumerate(
+                scalar_file.read_text(encoding='utf-8').splitlines(), 1):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for key, value in record.items():
+                if (isinstance(value, (int, float))
+                        and not math.isfinite(value)):
+                    raise FloatingPointError(
+                        f'Non-finite {key} in {scalar_file}:{line_number}')
+
+
 def calibrate_gamma(
         variant: str, args: argparse.Namespace, dataset_out: Path,
         image_dir: Path) -> float:
@@ -231,6 +256,7 @@ def calibrate_gamma(
         if args.amp:
             command.append('--amp')
         levir.run(command)
+        assert_finite_metrics(config.parent)
         observed = recent_displacement(config.parent)
         records.append(dict(
             round=pilot_round, gamma_max=gamma,
@@ -402,6 +428,19 @@ def main() -> None:
         variant for index, variant in enumerate(variants)
         if index % args.num_machines == args.machine_index]
     print(f'Assigned variants: {assigned}')
+    if args.probe_only:
+        for variant in assigned:
+            config = write_config(
+                variant, args, dataset_out, image_dir, pilot_round=1)
+            print(f'PROBE CONFIG {variant}: {config}')
+            if args.dry_run:
+                continue
+            command = [
+                sys.executable, str(levir.mmdet_root() / 'tools/train.py'),
+                str(config), '--work-dir', str(config.parent),
+                '--auto-scale-lr']
+            levir.run(command)
+        return
     for variant in assigned:
         gamma = None
         if args.pilot_calibrate and variant in FALSIFICATION_VARIANTS:
