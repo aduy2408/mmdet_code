@@ -58,7 +58,10 @@ def exclude_black_images(
         dataset_out: Path, data_root: Path, inventory: str) -> None:
     inventory_path = Path(inventory)
     if not inventory_path.is_absolute():
-        inventory_path = data_root / inventory_path
+        repo_inventory = Path(__file__).resolve().parent / inventory_path
+        inventory_path = (
+            repo_inventory if repo_inventory.is_file()
+            else data_root / inventory_path)
     with inventory_path.open(encoding='utf-8-sig', newline='') as stream:
         excluded = {row['image'] for row in csv.DictReader(stream)}
     for split in ('train', 'val', 'test'):
@@ -104,8 +107,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--pilot-iters', type=int, default=300)
     parser.add_argument('--target-displacement', type=float, default=0.014)
     parser.add_argument(
-        '--black-inventory',
-        default='Black Images Over 50 Percent/black_images_inventory.csv')
+        '--black-inventory', default='black_images_inventory.csv')
     parser.add_argument('--keep-black-images', action='store_true')
     parser.add_argument('--hf-repo-id', default='duyle2408/fcos_dbss_falsification')
     parser.add_argument('--hf-repo-type', default='dataset')
