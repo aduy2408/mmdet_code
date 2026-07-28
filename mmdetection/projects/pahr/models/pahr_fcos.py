@@ -29,6 +29,8 @@ class PAHRFCOS(FCOS):
                  loss_pos_weight: float = 0.1,
                  loss_offset_weight: float = 0.1,
                  use_phase_shift: bool = False,
+                 phase_gate_floor: float = 0.0,
+                 phase_strength: float = 1.0,
                  use_tiny_measurement: bool = False,
                  measurement_channels: int = 16,
                  measurement_center_weight: float = 0.1,
@@ -36,6 +38,8 @@ class PAHRFCOS(FCOS):
                  measurement_size_weight: float = 0.1,
                  measurement_size_blend: float = 0.5,
                  measurement_tiny_limit: float = 24.0,
+                 measurement_fixed_strength: float | None = None,
+                 measurement_center_gate_floor: float = 0.0,
                  **kwargs) -> None:
         super().__init__(*args, **kwargs)
         if not hasattr(self.neck, 'forward_with_aux'):
@@ -45,6 +49,12 @@ class PAHRFCOS(FCOS):
         self.loss_pos_weight = float(loss_pos_weight)
         self.loss_offset_weight = float(loss_offset_weight)
         self.use_phase_shift = bool(use_phase_shift)
+        if not 0 <= phase_gate_floor <= 1:
+            raise ValueError('phase_gate_floor must be in [0, 1]')
+        if phase_strength < 0:
+            raise ValueError('phase_strength must be non-negative')
+        self.phase_gate_floor = float(phase_gate_floor)
+        self.phase_strength = float(phase_strength)
         self.use_tiny_measurement = bool(use_tiny_measurement)
         self.position_loss_module = GaussianFocalLoss(reduction='mean')
         if self.use_tiny_measurement:
@@ -55,6 +65,12 @@ class PAHRFCOS(FCOS):
             self.measurement_size_weight = float(measurement_size_weight)
             self.measurement_size_blend = float(measurement_size_blend)
             self.measurement_tiny_limit = float(measurement_tiny_limit)
+            if not 0 <= measurement_center_gate_floor <= 1:
+                raise ValueError(
+                    'measurement_center_gate_floor must be in [0, 1]')
+            self.measurement_fixed_strength = measurement_fixed_strength
+            self.measurement_center_gate_floor = float(
+                measurement_center_gate_floor)
             self.measurement_stem = nn.Sequential(
                 nn.Conv2d(3, measurement_channels, 3, stride=2, padding=1),
                 nn.Conv2d(
@@ -349,12 +365,18 @@ class PAHRFCOS(FCOS):
             return adjusted
         position = aux.get(
             'phase_gate', aux['position_logits'].sigmoid())
+        position = self.phase_gate_floor + (
+            1 - self.phase_gate_floor) * position
         offsets = aux['offsets']
         shift_scale = float(self.position_stride)
         if self.bbox_head.norm_on_bbox and self.training:
             shift_scale = 1.0
-        dx = position * (offsets[:, 0:1] - 0.5) * shift_scale
-        dy = position * (offsets[:, 1:2] - 0.5) * shift_scale
+        dx = (
+            self.phase_strength * position
+            * (offsets[:, 0:1] - 0.5) * shift_scale)
+        dy = (
+            self.phase_strength * position
+            * (offsets[:, 1:2] - 0.5) * shift_scale)
         left, top, right, bottom = adjusted[0].chunk(4, dim=1)
         adjusted[0] = torch.cat(
             (left - dx, top - dy, right + dx, bottom + dy),
@@ -388,8 +410,14 @@ class PAHRFCOS(FCOS):
         size_gate = torch.sigmoid(
             (self.measurement_tiny_limit
              - (width * height).clamp_min(0).sqrt()) / 2)
-        gate = (center_probability * size_gate).detach()
-        strength = self.measurement_refine_scale.tanh()
+        gate = self.measurement_center_gate_floor + (
+            1 - self.measurement_center_gate_floor
+        ) * center_probability * size_gate
+        gate = gate.detach()
+        strength = (
+            self.measurement_refine_scale.tanh()
+            if self.measurement_fixed_strength is None
+            else self.measurement_fixed_strength)
         dx = gate * strength * phase_x
         dy = gate * strength * phase_y
         left = left - dx

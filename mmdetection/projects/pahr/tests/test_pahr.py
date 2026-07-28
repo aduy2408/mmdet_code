@@ -38,7 +38,8 @@ def detector(
         use_phase_shift=False,
         norm_on_bbox=False,
         guide_channels=0,
-        use_tiny_measurement=False):
+        use_tiny_measurement=False,
+        **kwargs):
     return PAHRFCOS(
         backbone=dict(
             type='ResNet',
@@ -71,6 +72,7 @@ def detector(
             norm_on_bbox=norm_on_bbox,
             strides=[8, 16, 32, 64, 128]),
         use_phase_shift=use_phase_shift,
+        **kwargs,
         test_cfg=ConfigDict(
             nms_pre=100,
             score_thr=0.05,
@@ -237,6 +239,13 @@ def test_scaled_schedule():
     assert VARIANTS['haar_v4_c2_768']['guide_channels'] == 16
     assert not VARIANTS['haar_v4_ungated_768']['use_output_gate']
     assert VARIANTS['haar_v5_measure_768']['use_tiny_measurement']
+    assert VARIANTS['haar_force_corr_1e3_768'][
+        'target_correction_ratio'] == 1e-3
+    assert VARIANTS['haar_force_measure_768'][
+        'measurement_fixed_strength'] == 1.0
+    assert VARIANTS['haar_force_phase_768']['phase_gate_floor'] == 1.0
+    scale_schedule(cfg, 10)
+    assert cfg.param_scheduler[1].milestones == [7, 9]
 
 
 def test_phase_shift_algebra_and_level_isolation():
@@ -252,6 +261,12 @@ def test_phase_shift_algebra_and_level_isolation():
             torch.zeros(1, 1, 2, 2)), dim=1))
     adjusted = model.phase_adjust_bbox_preds(bbox_preds, aux)
     expected = torch.tensor([8.0, 12.0, 12.0, 8.0]).view(1, 4, 1, 1)
+    assert torch.equal(adjusted[0], expected.expand_as(adjusted[0]))
+
+    forced = detector(
+        use_phase_shift=True, phase_gate_floor=1.0, phase_strength=1.0)
+    adjusted = forced.phase_adjust_bbox_preds(bbox_preds, aux)
+    expected = torch.tensor([6.0, 14.0, 14.0, 6.0]).view(1, 4, 1, 1)
     assert torch.equal(adjusted[0], expected.expand_as(adjusted[0]))
     assert torch.equal(adjusted[1], bbox_preds[1])
 
@@ -274,6 +289,18 @@ def test_p3_sizes_for_512_and_768_are_supported(size):
     output, aux = module.recompose(p3)
     assert output.shape == p3.shape
     assert aux['position_logits'].shape[-2:] == (size, size)
+
+
+@pytest.mark.parametrize('ratio', [1e-3, 1e-2])
+def test_forced_correction_ratio(ratio):
+    module = neck(
+        use_output_gate=False, target_correction_ratio=ratio)
+    p3 = torch.randn(2, 4, 16, 16)
+    module.detail_mixer[-1].bias.data.fill_(0.1)
+    output, aux = module.recompose(p3)
+    measured = (output - p3).norm() / p3.norm()
+    assert measured.item() == pytest.approx(ratio, rel=1e-4)
+    assert aux['applied_correction_rms'] > 0
 
 
 def test_targets_resize_padding_ignore_collision_and_empty():
@@ -407,6 +434,24 @@ def test_measurement_shapes_neutral_refinement_and_gradients(size):
     assert model.measurement_center.weight.grad is not None
     assert model.measurement_phase.weight.grad is not None
     assert model.measurement_size.weight.grad is not None
+
+
+def test_forced_measurement_refinement_bypasses_collapsed_scale():
+    model = detector(
+        use_tiny_measurement=True,
+        measurement_fixed_strength=1.0,
+        measurement_center_gate_floor=1.0,
+        measurement_size_blend=1.0)
+    bbox_preds = [torch.full((1, 4, 1, 1), 10.0)]
+    maps = dict(
+        measurement_center_logits=torch.full((1, 1, 4, 4), -100.0),
+        measurement_phase_logits=torch.full((1, 16, 1, 1), -100.0),
+        measurement_log_sizes=torch.full(
+            (1, 2, 1, 1), math.log(10.0)))
+    maps['measurement_phase_logits'][:, 15] = 100.0
+    refined = model.measurement_adjust_bbox_preds(bbox_preds, maps)
+    expected = torch.tensor([7., 7., 13., 13.]).view(1, 4, 1, 1)
+    assert torch.allclose(refined[0], expected)
 
 
 def test_detector_measurement_loss_predict_and_tensor_forward():

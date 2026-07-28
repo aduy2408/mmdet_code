@@ -23,6 +23,7 @@ class PAHRFPN(FPN):
                  guide_channels: int = 0,
                  use_output_gate: bool = True,
                  correction_gain: float = 1.0,
+                 target_correction_ratio: float = 0.0,
                  **kwargs) -> None:
         super().__init__(*args, **kwargs)
         channels = self.out_channels
@@ -36,12 +37,15 @@ class PAHRFPN(FPN):
             raise ValueError('guide_channels must be non-negative')
         if correction_gain < 0:
             raise ValueError('correction_gain must be non-negative')
+        if target_correction_ratio < 0:
+            raise ValueError('target_correction_ratio must be non-negative')
         self.gate_power = float(gate_power)
         self.correction_gate_floor = float(correction_gate_floor)
         self.detach_position_gate = bool(detach_position_gate)
         self.guide_channels = int(guide_channels)
         self.use_output_gate = bool(use_output_gate)
         self.correction_gain = float(correction_gain)
+        self.target_correction_ratio = float(target_correction_ratio)
         packed_guide_channels = 16 * self.guide_channels
         self.guide_projection = (
             nn.Sequential(
@@ -167,8 +171,19 @@ class PAHRFPN(FPN):
             torch.cat((*band_context, phase_context), dim=1)).chunk(3, dim=1)
         correction = self.inverse_haar(
             torch.zeros_like(bands[0]), *residuals)
-        output_gate = correction_gate if self.use_output_gate else 1.0
-        applied_correction = self.correction_gain * output_gate * correction
+        if self.target_correction_ratio:
+            # Deliberately force a measurable intervention for stress testing.
+            # Detaching the normalizer prevents the model from shrinking the
+            # raw correction to evade the requested energy.
+            correction_rms = correction.square().mean().sqrt()
+            p3_rms = p3.square().mean().sqrt()
+            scale = (
+                self.target_correction_ratio * p3_rms.detach()
+                / correction_rms.detach().clamp_min(1e-6))
+            applied_correction = scale * correction
+        else:
+            output_gate = correction_gate if self.use_output_gate else 1.0
+            applied_correction = self.correction_gain * output_gate * correction
         output = p3 + applied_correction
         aux = dict(
             position_logits=position_logits,

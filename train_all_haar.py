@@ -64,6 +64,23 @@ VARIANTS = {
         use_output_gate=False,
         guide_channels=16,
         use_tiny_measurement=True),
+    'haar_force_corr_1e3_768': dict(
+        image_size=768, phase_shift=False, giou=False,
+        scaled_schedule=True, use_output_gate=False,
+        target_correction_ratio=1e-3),
+    'haar_force_corr_1e2_768': dict(
+        image_size=768, phase_shift=False, giou=False,
+        scaled_schedule=True, use_output_gate=False,
+        target_correction_ratio=1e-2),
+    'haar_force_measure_768': dict(
+        image_size=768, phase_shift=False, giou=False,
+        scaled_schedule=True, use_output_gate=False, guide_channels=16,
+        use_tiny_measurement=True, measurement_fixed_strength=1.0,
+        measurement_center_gate_floor=0.25, measurement_size_blend=1.0),
+    'haar_force_phase_768': dict(
+        image_size=768, phase_shift=True, giou=False,
+        scaled_schedule=True, use_output_gate=False, correction_gain=0.0,
+        phase_gate_floor=1.0, phase_strength=1.0),
 }
 
 
@@ -156,8 +173,16 @@ def write_variant_config(variant: str, args: argparse.Namespace,
             cfg.train_dataloader, cfg.val_dataloader, cfg.test_dataloader):
         set_resize_scale(dataloader.dataset.pipeline, image_size)
     cfg.model.use_phase_shift = settings['phase_shift']
+    cfg.model.phase_gate_floor = settings.get('phase_gate_floor', 0.0)
+    cfg.model.phase_strength = settings.get('phase_strength', 1.0)
     cfg.model.use_tiny_measurement = settings.get(
         'use_tiny_measurement', False)
+    cfg.model.measurement_fixed_strength = settings.get(
+        'measurement_fixed_strength')
+    cfg.model.measurement_center_gate_floor = settings.get(
+        'measurement_center_gate_floor', 0.0)
+    cfg.model.measurement_size_blend = settings.get(
+        'measurement_size_blend', 0.5)
     if settings.get('v3_gate'):
         cfg.model.neck.update(
             gate_power=0.5,
@@ -166,7 +191,9 @@ def write_variant_config(variant: str, args: argparse.Namespace,
     cfg.model.neck.update(
         guide_channels=settings.get('guide_channels', 0),
         use_output_gate=settings.get('use_output_gate', True),
-        correction_gain=1.0)
+        correction_gain=settings.get('correction_gain', 1.0),
+        target_correction_ratio=settings.get(
+            'target_correction_ratio', 0.0))
     if settings.get('scaled_schedule'):
         scale_schedule(cfg, args.epochs)
     if detail_lr_mult := settings.get('detail_lr_mult'):
@@ -190,8 +217,17 @@ def write_variant_config(variant: str, args: argparse.Namespace,
         v3_gate=settings.get('v3_gate', False),
         guide_channels=settings.get('guide_channels', 0),
         use_output_gate=settings.get('use_output_gate', True),
-        correction_gain=1.0,
+        correction_gain=settings.get('correction_gain', 1.0),
+        target_correction_ratio=settings.get(
+            'target_correction_ratio', 0.0),
+        phase_gate_floor=settings.get('phase_gate_floor', 0.0),
+        phase_strength=settings.get('phase_strength', 1.0),
         use_tiny_measurement=settings.get('use_tiny_measurement', False),
+        measurement_fixed_strength=settings.get(
+            'measurement_fixed_strength'),
+        measurement_center_gate_floor=settings.get(
+            'measurement_center_gate_floor', 0.0),
+        measurement_size_blend=settings.get('measurement_size_blend', 0.5),
         detail_lr_mult=settings.get('detail_lr_mult', 1.0))
     output = Path(cfg.work_dir) / 'patched_config.py'
     output.parent.mkdir(parents=True, exist_ok=True)
