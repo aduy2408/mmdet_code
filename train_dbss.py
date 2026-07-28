@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import sys
@@ -53,6 +54,33 @@ def set_resize_scale(obj: Any, image_size: int) -> None:
             set_resize_scale(value, image_size)
 
 
+def exclude_black_images(
+        dataset_out: Path, data_root: Path, inventory: str) -> None:
+    inventory_path = Path(inventory)
+    if not inventory_path.is_absolute():
+        inventory_path = data_root / inventory_path
+    with inventory_path.open(encoding='utf-8-sig', newline='') as stream:
+        excluded = {row['image'] for row in csv.DictReader(stream)}
+    for split in ('train', 'val', 'test'):
+        annotation_path = dataset_out / 'annotations' / f'{split}.json'
+        payload = json.loads(annotation_path.read_text(encoding='utf-8'))
+        removed_ids = {
+            image['id'] for image in payload['images']
+            if Path(image['file_name']).name in excluded
+        }
+        payload['images'] = [
+            image for image in payload['images']
+            if image['id'] not in removed_ids
+        ]
+        payload['annotations'] = [
+            annotation for annotation in payload['annotations']
+            if annotation['image_id'] not in removed_ids
+        ]
+        annotation_path.write_text(
+            json.dumps(payload), encoding='utf-8')
+        print(f'{split}: excluded {len(removed_ids)} black images')
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data-root', default='LevirShipData')
@@ -75,6 +103,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--pilot-calibrate', action='store_true')
     parser.add_argument('--pilot-iters', type=int, default=300)
     parser.add_argument('--target-displacement', type=float, default=0.014)
+    parser.add_argument(
+        '--black-inventory',
+        default='Black Images Over 50 Percent/black_images_inventory.csv')
+    parser.add_argument('--keep-black-images', action='store_true')
     parser.add_argument('--hf-repo-id', default='duyle2408/fcos_dbss_falsification')
     parser.add_argument('--hf-repo-type', default='dataset')
     parser.add_argument('--hf-token', default='')
@@ -108,6 +140,7 @@ def write_config(
     if gamma_max is not None:
         cfg.model.neck.gamma_max = gamma_max
     cfg = levir.patch_config(cfg, variant, args, dataset_out, image_dir)
+    cfg.train_dataloader.dataset.filter_cfg.filter_empty_gt = False
     for dataloader in (
             cfg.train_dataloader, cfg.val_dataloader, cfg.test_dataloader):
         set_resize_scale(dataloader.dataset.pipeline, args.image_size)
@@ -349,6 +382,10 @@ def main() -> None:
     if not 0 <= args.machine_index < args.num_machines:
         raise ValueError('--machine-index must be in [0, num_machines)')
     dataset_out, image_dir = levir.prepare_coco_dataset(args)
+    if not args.keep_black_images:
+        exclude_black_images(
+            dataset_out, levir.resolve_path(args.data_root),
+            args.black_inventory)
     assigned = [
         variant for index, variant in enumerate(variants)
         if index % args.num_machines == args.machine_index]
