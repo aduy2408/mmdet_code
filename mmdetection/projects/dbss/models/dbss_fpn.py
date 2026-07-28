@@ -23,7 +23,8 @@ class DBSSFPN(FPN):
             candidate_grid: tuple[int, int] = (8, 8),
             shortlist_size: int = 24,
             num_bases: int = 8,
-            diversity_beta: float = 0.25,
+            diversity_beta: float = 1.0,
+            basis_similarity_threshold: float = 0.9,
             projection_mode: str = 'ridge',
             ridge_lambda: float = 1e-3,
             temperature: float = 0.1,
@@ -42,6 +43,9 @@ class DBSSFPN(FPN):
                 'Require 1 <= num_bases <= shortlist_size <= grid size')
         if diversity_beta < 0:
             raise ValueError('diversity_beta must be non-negative')
+        if not -1 <= basis_similarity_threshold <= 1:
+            raise ValueError(
+                'basis_similarity_threshold must be in [-1, 1]')
         if projection_mode not in {'ridge', 'softmax'}:
             raise ValueError(
                 "projection_mode must be either 'ridge' or 'softmax'")
@@ -55,6 +59,8 @@ class DBSSFPN(FPN):
         self.shortlist_size = int(shortlist_size)
         self.num_bases = int(num_bases)
         self.diversity_beta = float(diversity_beta)
+        self.basis_similarity_threshold = float(
+            basis_similarity_threshold)
         self.projection_mode = projection_mode
         self.ridge_lambda = float(ridge_lambda)
         self.temperature = float(temperature)
@@ -123,11 +129,15 @@ class DBSSFPN(FPN):
             candidates = normalized_candidates[shortlist]
             selected = normalized_candidates[torch.stack(chosen)]
             redundancy = candidates @ selected.transpose(0, 1)
+            max_similarity = redundancy.max(dim=1).values
             selection_score = (
                 scores[shortlist]
-                - self.diversity_beta * redundancy.max(dim=1).values)
+                - self.diversity_beta * max_similarity)
+            diverse = available & (
+                max_similarity <= self.basis_similarity_threshold)
+            eligible = diverse if diverse.any() else available
             selection_score = selection_score.masked_fill(
-                ~available, -torch.inf)
+                ~eligible, -torch.inf)
             next_position = selection_score.argmax()
             chosen.append(shortlist[next_position])
             available[next_position] = False

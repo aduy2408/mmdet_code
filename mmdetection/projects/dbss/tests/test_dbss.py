@@ -116,7 +116,8 @@ def test_valid_crop_excludes_padding_from_candidates():
 
 
 def test_diversity_selection_avoids_duplicate_top_candidates():
-    module = neck(diversity_beta=1.0)
+    module = neck(
+        diversity_beta=1.0, basis_similarity_threshold=0.9)
     candidates = torch.tensor([
         [1.0, 0.0, 0.0],
         [1.0, 0.0, 0.0],
@@ -127,6 +128,27 @@ def test_diversity_selection_avoids_duplicate_top_candidates():
     assert int(selected[0]) == 0
     assert int(selected[1]) != 1
     assert selected.numel() == module.num_bases
+
+
+def test_diversity_fallback_always_returns_requested_bases():
+    module = DBSSFPN(
+        in_channels=[2, 4, 8, 16],
+        out_channels=4,
+        num_outs=5,
+        start_level=1,
+        add_extra_convs='on_output',
+        embed_channels=3,
+        candidate_grid=(3, 3),
+        shortlist_size=9,
+        num_bases=8,
+        hidden_channels=4,
+        diversity_beta=1.0,
+        basis_similarity_threshold=0.9)
+    candidates = torch.tensor([[1.0, 0.0, 0.0]]).repeat(9, 1)
+    selected = module._select_bases(
+        torch.linspace(1, 0, 9), candidates)
+    assert selected.numel() == 8
+    assert selected.unique().numel() == 8
 
 
 @pytest.mark.parametrize('mode', ['ridge', 'softmax'])
@@ -191,6 +213,27 @@ def test_center_sampling_and_separation_empty_gt():
     assert p3.grad is not None
 
 
+def test_improvement_loss_is_active_at_identity_initialization():
+    model = detector()
+    pre_p3 = torch.randn(1, 16, 4, 4)
+    post_p3 = pre_p3.clone().requires_grad_()
+    objective = model.separation_objective(
+        dict(
+            pre_p3=pre_p3,
+            post_p3=post_p3,
+            selected_candidates_p3=torch.randn(1, 2, 16)),
+        [sample([[7, 7, 9, 9]])])
+    expected = model.improvement_margin * model.loss_sep_weight
+    assert torch.allclose(
+        objective['loss_dbss_sep'],
+        objective['loss_dbss_sep'].new_tensor(expected),
+        atol=1e-6)
+    assert objective['dbss_active_ratio'] == 1
+    objective['loss_dbss_sep'].backward()
+    assert torch.isfinite(post_p3.grad).all()
+    assert post_p3.grad.abs().sum() > 0
+
+
 @pytest.mark.parametrize('mode', ['ridge', 'softmax'])
 def test_detector_loss_and_forward_smoke(mode):
     model = detector(mode)
@@ -228,8 +271,19 @@ def test_ridge_autocast_uses_fp32_solve_and_restores_dtype(monkeypatch):
 def test_configs_load():
     config_dir = Path(__file__).parents[1] / 'configs'
     ridge = Config.fromfile(config_dir / 'fcos_dbss_ridge.py')
+    gamma06 = Config.fromfile(config_dir / 'fcos_dbss_ridge_gamma06.py')
+    gamma10 = Config.fromfile(config_dir / 'fcos_dbss_ridge_gamma10.py')
     softmax = Config.fromfile(config_dir / 'fcos_dbss_softmax.py')
     haar = Config.fromfile(config_dir / 'fcos_dbss_ridge_haar.py')
     assert ridge.model.neck.projection_mode == 'ridge'
+    assert ridge.model.neck.gamma_max == 0.3
+    assert gamma06.model.neck.gamma_max == 0.6
+    assert gamma10.model.neck.gamma_max == 1.0
+    assert ridge.model.improvement_margin == 0.03
+    assert ridge.model.loss_sep_weight == 0.5
+    direction_options = (
+        ridge.optim_wrapper.paramwise_cfg.custom_keys['neck.direction.2'])
+    assert direction_options.lr_mult == 10
+    assert direction_options.decay_mult == 0
     assert softmax.model.neck.projection_mode == 'softmax'
     assert haar.model.neck.use_haar_reliability

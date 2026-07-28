@@ -17,9 +17,13 @@ import train_all_levir_baseline as levir
 VARIANTS = {
     'baseline': 'configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py',
     'ridge': 'projects/dbss/configs/fcos_dbss_ridge.py',
+    'ridge_g03': 'projects/dbss/configs/fcos_dbss_ridge_gamma03.py',
+    'ridge_g06': 'projects/dbss/configs/fcos_dbss_ridge_gamma06.py',
+    'ridge_g10': 'projects/dbss/configs/fcos_dbss_ridge_gamma10.py',
     'softmax': 'projects/dbss/configs/fcos_dbss_softmax.py',
     'ridge_haar': 'projects/dbss/configs/fcos_dbss_ridge_haar.py',
 }
+DEFAULT_VARIANTS = 'ridge_g03,ridge_g06,ridge_g10'
 
 
 def comma_list(value: str) -> list[str]:
@@ -45,7 +49,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         '--work-dir', default='mmdetection/work_dirs/levir_dbss')
     parser.add_argument(
-        '--variants', default=','.join(VARIANTS),
+        '--variants', default=DEFAULT_VARIANTS,
         help=f"Comma-separated: {', '.join(VARIANTS)}")
     parser.add_argument('--image-size', type=int, default=768)
     parser.add_argument('--epochs', type=int, default=40)
