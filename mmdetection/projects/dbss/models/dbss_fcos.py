@@ -23,19 +23,19 @@ class DBSSFCOS(FCOS):
             self,
             *args,
             position_stride: int = 8,
-            separation_margin: float = 0.2,
-            loss_sep_weight: float = 0.1,
+            improvement_margin: float = 0.03,
+            loss_sep_weight: float = 0.5,
             **kwargs) -> None:
         super().__init__(*args, **kwargs)
         if not hasattr(self.neck, 'forward_with_aux'):
             raise TypeError('DBSSFCOS requires a neck with forward_with_aux()')
         if position_stride < 1:
             raise ValueError('position_stride must be positive')
-        if separation_margin < 0 or loss_sep_weight < 0:
+        if improvement_margin < 0 or loss_sep_weight < 0:
             raise ValueError(
-                'separation_margin and loss_sep_weight must be non-negative')
+                'improvement_margin and loss_sep_weight must be non-negative')
         self.position_stride = int(position_stride)
-        self.separation_margin = float(separation_margin)
+        self.improvement_margin = float(improvement_margin)
         self.loss_sep_weight = float(loss_sep_weight)
 
     def _valid_shapes(self, batch_data_samples: SampleList
@@ -100,8 +100,8 @@ class DBSSFCOS(FCOS):
             gap_post = (
                 F.cosine_similarity(post_foreground, expanded_foreground)
                 - F.cosine_similarity(post_foreground, expanded_background))
-            hinge_values.append(
-                F.relu(self.separation_margin - gap_post))
+            hinge_values.append(F.relu(
+                self.improvement_margin - (gap_post - gap_pre)))
             gap_pre_values.append(gap_pre)
             gap_post_values.append(gap_post)
 
