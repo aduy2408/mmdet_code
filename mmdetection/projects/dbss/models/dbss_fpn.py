@@ -25,6 +25,8 @@ class DBSSFPN(FPN):
             num_bases: int = 8,
             diversity_beta: float = 1.0,
             basis_similarity_threshold: float = 0.9,
+            selector_mode: str = 'legacy_forced_k',
+            residual_mode: str = 'ridge',
             projection_mode: str = 'ridge',
             ridge_lambda: float = 1e-3,
             temperature: float = 0.1,
@@ -46,6 +48,15 @@ class DBSSFPN(FPN):
         if not -1 <= basis_similarity_threshold <= 1:
             raise ValueError(
                 'basis_similarity_threshold must be in [-1, 1]')
+        if selector_mode not in {'legacy_forced_k', 'variable_k'}:
+            raise ValueError(
+                "selector_mode must be 'legacy_forced_k' or 'variable_k'")
+        residual_modes = {
+            'ridge', 'learned_control', 'random_bases', 'shuffled_bases',
+            'topk_only', 'softmax'
+        }
+        if residual_mode not in residual_modes:
+            raise ValueError(f'residual_mode must be one of {residual_modes}')
         if projection_mode not in {'ridge', 'softmax'}:
             raise ValueError(
                 "projection_mode must be either 'ridge' or 'softmax'")
@@ -61,6 +72,8 @@ class DBSSFPN(FPN):
         self.diversity_beta = float(diversity_beta)
         self.basis_similarity_threshold = float(
             basis_similarity_threshold)
+        self.selector_mode = selector_mode
+        self.residual_mode = residual_mode
         self.projection_mode = projection_mode
         self.ridge_lambda = float(ridge_lambda)
         self.temperature = float(temperature)
@@ -70,6 +83,8 @@ class DBSSFPN(FPN):
         channels = self.out_channels
         self.embedding = nn.Conv2d(channels, embed_channels, 1)
         self.embedding_norm = nn.LayerNorm(embed_channels)
+        self.learned_control = nn.Conv2d(embed_channels, embed_channels, 1)
+        self.learned_control_norm = nn.LayerNorm(embed_channels)
         direction_in = channels + embed_channels
         self.direction = nn.Sequential(
             nn.Conv2d(direction_in, hidden_channels, 1),
@@ -135,6 +150,8 @@ class DBSSFPN(FPN):
                 - self.diversity_beta * max_similarity)
             diverse = available & (
                 max_similarity <= self.basis_similarity_threshold)
+            if self.selector_mode == 'variable_k' and not diverse.any():
+                break
             eligible = diverse if diverse.any() else available
             selection_score = selection_score.masked_fill(
                 ~eligible, -torch.inf)
@@ -142,7 +159,8 @@ class DBSSFPN(FPN):
             chosen.append(shortlist[next_position])
             available[next_position] = False
 
-        if len(chosen) < self.num_bases:
+        if (self.selector_mode == 'legacy_forced_k'
+                and len(chosen) < self.num_bases):
             ranked = torch.argsort(scores, descending=True)
             chosen_values = {int(index) for index in chosen}
             for index in ranked:
@@ -153,9 +171,12 @@ class DBSSFPN(FPN):
                     break
         return torch.stack(chosen)
 
-    def _project(self, tokens: Tensor, bases: Tensor) -> Tensor:
+    def _project(
+            self, tokens: Tensor, bases: Tensor,
+            projection_mode: str | None = None) -> Tensor:
         original_dtype = tokens.dtype
-        if self.projection_mode == 'ridge':
+        projection_mode = projection_mode or self.projection_mode
+        if projection_mode == 'ridge':
             with torch.autocast(
                     device_type=tokens.device.type, enabled=False):
                 tokens32 = tokens.float()
@@ -190,18 +211,11 @@ class DBSSFPN(FPN):
             -(probabilities * probabilities.clamp_min(1e-12).log()).sum())
         return max_cosine, effective_rank.to(normalized_bases.dtype)
 
-    def _background_residual(
+    def _candidate_data(
             self, p3: Tensor, embedding: Tensor,
             valid_shapes: Sequence[tuple[int, int]]
-    ) -> tuple[Tensor, dict[str, Tensor]]:
-        _, _, height, width = p3.shape
-        residuals = []
-        selected_indices = []
-        representativeness = []
-        selected_raw_candidates = []
-        max_cosines = []
-        effective_ranks = []
-
+    ) -> list[dict[str, Tensor | int]]:
+        data = []
         for image_index, (valid_height, valid_width) in enumerate(valid_shapes):
             valid_embedding = embedding[
                 image_index:image_index + 1, :, :valid_height, :valid_width]
@@ -217,28 +231,92 @@ class DBSSFPN(FPN):
             scores = (
                 normalized_candidates
                 @ normalized_tokens.transpose(0, 1)).mean(dim=1)
-            indices = self._select_bases(scores, normalized_candidates)
-            bases = candidate64[indices]
-            normalized_bases = normalized_candidates[indices]
-            background = self._project(tokens, bases)
+            data.append(dict(
+                tokens=tokens,
+                candidate64=candidate64,
+                candidate256=candidate256,
+                normalized_candidates=normalized_candidates,
+                scores=scores,
+                valid_height=valid_height,
+                valid_width=valid_width))
+        return data
+
+    def _indices(
+            self, scores: Tensor, normalized_candidates: Tensor) -> Tensor:
+        indices = self._select_bases(scores, normalized_candidates)
+        if self.residual_mode == 'topk_only':
+            return torch.topk(scores, k=indices.numel()).indices
+        if self.residual_mode == 'random_bases':
+            return torch.randperm(
+                scores.numel(), device=scores.device)[:indices.numel()]
+        return indices
+
+    def _background_residual(
+            self, p3: Tensor, embedding: Tensor,
+            valid_shapes: Sequence[tuple[int, int]]
+    ) -> tuple[Tensor, dict[str, Tensor | list[Tensor]]]:
+        _, _, height, width = p3.shape
+        data = self._candidate_data(p3, embedding, valid_shapes)
+        indices_per_image = [
+            self._indices(item['scores'], item['normalized_candidates'])
+            for item in data
+        ]
+        residuals = []
+        selected_raw_candidates = []
+        max_cosines = []
+        effective_ranks = []
+
+        for image_index, item in enumerate(data):
+            indices = indices_per_image[image_index]
+            tokens = item['tokens']
+            diagnostic_candidates = item['normalized_candidates']
+            source_indices = indices
+            if self.residual_mode == 'learned_control':
+                valid_embedding = embedding[
+                    image_index:image_index + 1, :, :item['valid_height'],
+                    :item['valid_width']]
+                control = self.learned_control(valid_embedding)
+                valid_residual = self.learned_control_norm(
+                    control.permute(0, 2, 3, 1)).permute(0, 3, 1, 2)
+            else:
+                source = data[(image_index + 1) % len(data)]
+                if self.residual_mode != 'shuffled_bases':
+                    source = item
+                else:
+                    diagnostic_candidates = source['normalized_candidates']
+                if self.residual_mode == 'shuffled_bases' and len(data) == 1:
+                    source_indices = (
+                        indices + math.prod(self.candidate_grid) // 2
+                    ) % math.prod(self.candidate_grid)
+                bases = source['candidate64'][source_indices]
+                projection_mode = (
+                    'softmax' if self.residual_mode == 'softmax' else 'ridge')
+                background = self._project(
+                    tokens, bases, projection_mode=projection_mode)
+                valid_residual = (
+                    tokens - background).t().reshape(
+                        1, self.embed_channels, item['valid_height'],
+                        item['valid_width'])
             valid_residual = (
-                tokens - background).t().reshape(
-                    1, self.embed_channels, valid_height, valid_width)
+                valid_residual)
             residuals.append(F.pad(
                 valid_residual,
-                (0, width - valid_width, 0, height - valid_height)))
+                (0, width - item['valid_width'],
+                 0, height - item['valid_height'])))
+            normalized_bases = diagnostic_candidates[source_indices]
             max_cosine, effective_rank = self._basis_diagnostics(
                 normalized_bases)
-            selected_indices.append(indices)
-            representativeness.append(scores)
-            selected_raw_candidates.append(candidate256[indices])
+            selected_raw_candidates.append(item['candidate256'][indices])
             max_cosines.append(max_cosine)
             effective_ranks.append(effective_rank)
 
         aux = dict(
-            selected_indices=torch.stack(selected_indices),
-            representativeness=torch.stack(representativeness),
-            selected_candidates_p3=torch.stack(selected_raw_candidates),
+            selected_indices=indices_per_image,
+            representativeness=[item['scores'] for item in data],
+            selected_candidates_p3=selected_raw_candidates,
+            basis_count=torch.tensor(
+                [indices.numel() for indices in indices_per_image],
+                device=p3.device),
             basis_max_cosine=torch.stack(max_cosines),
             basis_effective_rank=torch.stack(effective_ranks))
         return torch.cat(residuals), aux
@@ -288,12 +366,24 @@ class DBSSFPN(FPN):
             pre_p3=p3,
             post_p3=enhanced,
             residual=residual,
+            residual_rms=residual.square().mean(
+                dim=(1, 2, 3)).sqrt(),
             gamma=gamma,
+            gamma_mean=gamma.mean(dim=(1, 2, 3)),
+            gamma_std=gamma.std(dim=(1, 2, 3)),
             displacement=displacement,
             feature_scale=feature_scale,
+            displacement_ratio_per_image=(
+                displacement.square().mean(dim=(1, 2, 3)).sqrt()
+                / (p3.square().mean(dim=(1, 2, 3)).sqrt() + 1e-6)),
             displacement_ratio=(
                 displacement.square().mean().sqrt()
                 / (p3.square().mean().sqrt() + 1e-6)))
+        first_direction = self.direction[0].weight
+        p3_weight = first_direction[:, :self.out_channels]
+        residual_weight = first_direction[:, self.out_channels:]
+        aux['direction_weight_ratio'] = (
+            residual_weight.norm() / p3_weight.norm().clamp_min(1e-12))
         return enhanced, aux
 
     def forward_with_aux(

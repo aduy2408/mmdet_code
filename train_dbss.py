@@ -23,7 +23,19 @@ VARIANTS = {
     'softmax': 'projects/dbss/configs/fcos_dbss_softmax.py',
     'ridge_haar': 'projects/dbss/configs/fcos_dbss_ridge_haar.py',
 }
-DEFAULT_VARIANTS = 'ridge_g03,ridge_g06,ridge_g10'
+SELECTORS = ('legacy_forced_k', 'variable_k')
+RESIDUALS = (
+    'ridge', 'learned_control', 'random_bases', 'shuffled_bases',
+    'topk_only', 'softmax')
+FALSIFICATION_VARIANTS = {
+    f'{selector}_{residual}': (selector, residual)
+    for selector in SELECTORS for residual in RESIDUALS
+}
+VARIANTS.update({
+    variant: 'projects/dbss/configs/fcos_dbss_ridge_gamma06.py'
+    for variant in FALSIFICATION_VARIANTS
+})
+DEFAULT_VARIANTS = ','.join(FALSIFICATION_VARIANTS)
 
 
 def comma_list(value: str) -> list[str]:
@@ -52,7 +64,7 @@ def parse_args() -> argparse.Namespace:
         '--variants', default=DEFAULT_VARIANTS,
         help=f"Comma-separated: {', '.join(VARIANTS)}")
     parser.add_argument('--image-size', type=int, default=768)
-    parser.add_argument('--epochs', type=int, default=40)
+    parser.add_argument('--epochs', type=int, default=12)
     parser.add_argument('--batch-size', type=int, default=4)
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--seed', type=int, default=42)
@@ -60,6 +72,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--amp', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--test-only', action='store_true')
+    parser.add_argument('--pilot-calibrate', action='store_true')
+    parser.add_argument('--pilot-iters', type=int, default=300)
+    parser.add_argument('--target-displacement', type=float, default=0.014)
+    parser.add_argument('--hf-repo-id', default='duyle2408/fcos_dbss_falsification')
+    parser.add_argument('--hf-repo-type', default='dataset')
+    parser.add_argument('--hf-token', default='')
+    parser.add_argument('--no-hf-upload', action='store_true')
     parser.add_argument('--num-machines', type=int, default=1)
     parser.add_argument('--machine-index', type=int, default=0)
     return parser.parse_args()
@@ -69,7 +88,9 @@ def write_config(
         variant: str,
         args: argparse.Namespace,
         dataset_out: Path,
-        image_dir: Path) -> Path:
+        image_dir: Path,
+        gamma_max: float | None = None,
+        pilot_round: int | None = None) -> Path:
     root = str(levir.mmdet_root())
     if root not in sys.path:
         sys.path.insert(0, root)
@@ -78,6 +99,14 @@ def write_config(
 
     register_all_modules()
     cfg = Config.fromfile(str(levir.mmdet_root() / VARIANTS[variant]))
+    if variant in FALSIFICATION_VARIANTS:
+        selector_mode, residual_mode = FALSIFICATION_VARIANTS[variant]
+        cfg.model.neck.selector_mode = selector_mode
+        cfg.model.neck.residual_mode = residual_mode
+        cfg.model.neck.projection_mode = (
+            'softmax' if residual_mode == 'softmax' else 'ridge')
+    if gamma_max is not None:
+        cfg.model.neck.gamma_max = gamma_max
     cfg = levir.patch_config(cfg, variant, args, dataset_out, image_dir)
     for dataloader in (
             cfg.train_dataloader, cfg.val_dataloader, cfg.test_dataloader):
@@ -90,9 +119,22 @@ def write_config(
                 round(args.epochs * 11 / 12)]
     cfg.dbss_experiment = dict(
         variant=variant,
+        selector_mode=cfg.model.neck.get('selector_mode'),
+        residual_mode=cfg.model.neck.get('residual_mode'),
+        gamma_max=cfg.model.neck.gamma_max,
         image_size=args.image_size,
         feature_stride=8,
         seed=args.seed)
+    if pilot_round is not None:
+        cfg.work_dir = str(
+            Path(args.work_dir) / '_pilot' / variant / f'round_{pilot_round}')
+        cfg.train_cfg = dict(
+            type='IterBasedTrainLoop',
+            max_iters=args.pilot_iters,
+            val_interval=args.pilot_iters + 1)
+        cfg.param_scheduler = []
+        cfg.default_hooks.checkpoint.update(
+            by_epoch=False, interval=args.pilot_iters, save_best=None)
     output = Path(cfg.work_dir) / 'patched_config.py'
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg.dump(str(output))
@@ -117,6 +159,83 @@ def latest_metrics(work_dir: Path) -> dict[str, float]:
     return metrics
 
 
+def recent_displacement(work_dir: Path, count: int = 50) -> float:
+    values = []
+    for scalar_file in sorted(work_dir.glob('**/vis_data/scalars.json')):
+        for line in scalar_file.read_text(encoding='utf-8').splitlines():
+            try:
+                value = json.loads(line).get('dbss_displacement_ratio')
+            except json.JSONDecodeError:
+                continue
+            if isinstance(value, (int, float)):
+                values.append(float(value))
+    if not values:
+        raise RuntimeError(f'No displacement diagnostics in {work_dir}')
+    return sum(values[-count:]) / min(count, len(values))
+
+
+def calibrate_gamma(
+        variant: str, args: argparse.Namespace, dataset_out: Path,
+        image_dir: Path) -> float:
+    gamma = 0.6
+    records = []
+    for pilot_round in (1, 2):
+        config = write_config(
+            variant, args, dataset_out, image_dir,
+            gamma_max=gamma, pilot_round=pilot_round)
+        command = [
+            sys.executable, str(levir.mmdet_root() / 'tools/train.py'),
+            str(config), '--work-dir', str(config.parent), '--auto-scale-lr']
+        if args.amp:
+            command.append('--amp')
+        levir.run(command)
+        observed = recent_displacement(config.parent)
+        records.append(dict(
+            round=pilot_round, gamma_max=gamma,
+            displacement_ratio=observed))
+        if 0.011 <= observed <= 0.017:
+            break
+        if pilot_round == 1:
+            gamma = min(2.0, max(
+                0.05,
+                gamma * args.target_displacement / max(observed, 1e-12)))
+    calibration_file = Path(args.work_dir) / variant / 'calibration.json'
+    calibration_file.parent.mkdir(parents=True, exist_ok=True)
+    calibration_file.write_text(json.dumps(
+        dict(variant=variant, selected_gamma=gamma, pilots=records), indent=2))
+    return gamma
+
+
+def upload_variant(variant: str, args: argparse.Namespace) -> None:
+    if args.no_hf_upload:
+        return
+    token = args.hf_token or os.environ.get('HF_TOKEN')
+    if not token:
+        raise ValueError('HF_TOKEN is required unless --no-hf-upload is set')
+    from huggingface_hub import HfApi
+    work_dir = Path(args.work_dir) / variant
+    api = HfApi(token=token)
+    api.create_repo(
+        repo_id=args.hf_repo_id, repo_type=args.hf_repo_type,
+        exist_ok=True)
+    api.upload_folder(
+        folder_path=str(work_dir),
+        path_in_repo=variant,
+        repo_id=args.hf_repo_id,
+        repo_type=args.hf_repo_type)
+
+
+def _distribution(values: list[float]) -> dict[str, float]:
+    import torch
+    tensor = torch.tensor(values, dtype=torch.float32)
+    return {
+        'mean': float(tensor.mean()),
+        'median': float(tensor.median()),
+        'p10': float(torch.quantile(tensor, 0.1)),
+        'p90': float(torch.quantile(tensor, 0.9)),
+    }
+
+
 def dbss_diagnostics(config: Path, checkpoint: Path) -> dict[str, Any]:
     os.environ.setdefault('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', '1')
     import torch
@@ -132,36 +251,63 @@ def dbss_diagnostics(config: Path, checkpoint: Path) -> dict[str, Any]:
     if not hasattr(model.neck, 'forward_with_aux'):
         return dict(parameters=parameters)
     loader = Runner.build_dataloader(cfg.val_dataloader)
-    batch = model.data_preprocessor(next(iter(loader)), training=False)
-    samples = batch['data_samples']
-    torch.cuda.synchronize()
-    started = time.perf_counter()
+    values = {
+        key: [] for key in (
+            'displacement_ratio', 'basis_max_cosine',
+            'basis_effective_rank', 'basis_count', 'gamma_mean', 'gamma_std',
+            'residual_rms', 'gap_pre', 'gap_post', 'gap_gain',
+            'active_ratio', 'direction_weight_ratio')
+    }
+    basis_histogram: dict[str, int] = {}
+    latencies = []
+    p3_shape = None
     with torch.inference_mode():
-        features, aux = model._extract_feat_with_dbss_aux(
-            batch['inputs'], samples)
-    torch.cuda.synchronize()
-    elapsed = time.perf_counter() - started
-    objective = model.separation_objective(aux, samples)
+        for raw_batch in loader:
+            batch = model.data_preprocessor(raw_batch, training=False)
+            samples = batch['data_samples']
+            torch.cuda.synchronize()
+            started = time.perf_counter()
+            features, aux = model._extract_feat_with_dbss_aux(
+                batch['inputs'], samples)
+            torch.cuda.synchronize()
+            latencies.append(time.perf_counter() - started)
+            objective = model.separation_objective(aux, samples)
+            p3_shape = list(features[0].shape)
+            values['displacement_ratio'].extend(
+                aux['displacement_ratio_per_image'].float().cpu().tolist())
+            for key in (
+                    'basis_max_cosine', 'basis_effective_rank', 'basis_count',
+                    'gamma_mean', 'gamma_std', 'residual_rms'):
+                values[key].extend(aux[key].float().cpu().tolist())
+            for key in ('gap_pre', 'gap_post', 'gap_gain', 'active_ratio'):
+                values[key].append(float(objective[f'dbss_{key}']))
+            values['direction_weight_ratio'].append(
+                float(aux['direction_weight_ratio']))
+            for count in aux['basis_count'].tolist():
+                label = str(int(count))
+                basis_histogram[label] = basis_histogram.get(label, 0) + 1
+    total_images = sum(basis_histogram.values())
     return dict(
         parameters=parameters,
-        batch_latency_seconds=elapsed,
-        batch_size=len(samples),
-        displacement_ratio=float(aux['displacement_ratio']),
-        basis_max_cosine=float(aux['basis_max_cosine'].mean()),
-        basis_effective_rank=float(aux['basis_effective_rank'].mean()),
-        gap_pre=float(objective['dbss_gap_pre']),
-        gap_post=float(objective['dbss_gap_post']),
-        gap_gain=float(objective['dbss_gap_gain']),
-        active_ratio=float(objective['dbss_active_ratio']),
-        p3_shape=list(features[0].shape))
+        batch_latency_seconds=_distribution(latencies),
+        distributions={
+            key: _distribution(metric_values)
+            for key, metric_values in values.items()
+        },
+        basis_count_histogram=basis_histogram,
+        single_basis_ratio=(
+            basis_histogram.get('1', 0) / max(total_images, 1)),
+        p3_shape=p3_shape)
 
 
 def run_variant(
         variant: str,
         args: argparse.Namespace,
         dataset_out: Path,
-        image_dir: Path) -> None:
-    config = write_config(variant, args, dataset_out, image_dir)
+        image_dir: Path,
+        gamma_max: float | None = None) -> None:
+    config = write_config(
+        variant, args, dataset_out, image_dir, gamma_max=gamma_max)
     print(f'CONFIG {variant}: {config}')
     if args.dry_run:
         return
@@ -188,6 +334,7 @@ def run_variant(
         summary['dbss'] = dbss_diagnostics(config, checkpoint)
     (work_dir / 'experiment_summary.json').write_text(
         json.dumps(summary, indent=2), encoding='utf-8')
+    upload_variant(variant, args)
 
 
 def main() -> None:
@@ -206,7 +353,12 @@ def main() -> None:
         if index % args.num_machines == args.machine_index]
     print(f'Assigned variants: {assigned}')
     for variant in assigned:
-        run_variant(variant, args, dataset_out, image_dir)
+        gamma = None
+        if args.pilot_calibrate and variant in FALSIFICATION_VARIANTS:
+            gamma = calibrate_gamma(
+                variant, args, dataset_out, image_dir)
+        run_variant(
+            variant, args, dataset_out, image_dir, gamma_max=gamma)
 
 
 if __name__ == '__main__':
