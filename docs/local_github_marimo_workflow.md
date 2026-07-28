@@ -6,9 +6,11 @@ không chạy chồng experiment trên một GPU.
 
 ## 1. Làm việc local
 
-Làm việc trên branch `dbss` và kiểm tra trạng thái trước khi sửa:
+Lấy branch từ project hiện tại; không hardcode tên branch trong lệnh sync:
 
 ```bash
+PROJECT_BRANCH="$(git branch --show-current)"
+test -n "$PROJECT_BRANCH"
 git status --short --branch
 git log -1 --oneline
 ```
@@ -58,13 +60,15 @@ git commit -m "feat(dbss): <imperative summary>"
 Nếu HTTPS remote không có credential, push bằng SSH mà không cần đổi remote:
 
 ```bash
-git push git@github.com:aduy2408/mmdet_code.git dbss:dbss
+git push git@github.com:aduy2408/mmdet_code.git \
+  "$PROJECT_BRANCH:$PROJECT_BRANCH"
 ```
 
 Xác nhận remote chứa đúng commit:
 
 ```bash
-git ls-remote git@github.com:aduy2408/mmdet_code.git refs/heads/dbss
+git ls-remote git@github.com:aduy2408/mmdet_code.git \
+  "refs/heads/$PROJECT_BRANCH"
 ```
 
 Ghi lại full SHA. Không cho Marimo pull dựa trên mô tả như “latest” hoặc chỉ
@@ -92,8 +96,16 @@ Từ live kernel, chạy Git trong `/marimo/mmdet_code`:
 ```python
 import subprocess
 
+project_branch = subprocess.run(
+    ["git", "branch", "--show-current"],
+    cwd="/marimo/mmdet_code",
+    text=True,
+    capture_output=True,
+    check=True,
+).stdout.strip()
+assert project_branch
 subprocess.run(
-    ["git", "pull", "--ff-only", "origin", "dbss"],
+    ["git", "pull", "--ff-only", "origin", project_branch],
     cwd="/marimo/mmdet_code",
     check=True,
 )
@@ -128,12 +140,14 @@ cho intermediate variables để tránh lỗi multiply-defined names trong DAG.
 Kết nối helper dùng placeholder/environment variable:
 
 ```bash
-MARIMO_TOKEN="$MARIMO_TOKEN" execute-code.sh \
+execute-code.sh \
   --url "$MARIMO_URL" \
   --session "$MARIMO_SESSION" \
+  --token "$MARIMO_TOKEN" \
   -c 'print("connected")'
 ```
 
+Xác nhận output có `connected` và đúng session trước khi thay đổi notebook.
 Không ghi URL riêng, session ID, HF token hoặc auth token thật vào repo.
 
 ## 6. Launch và theo dõi
@@ -174,6 +188,30 @@ nên báo:
 - Log tail.
 - Số traceback/OOM.
 - Checkpoint, predictions và test completion.
+
+Sau khi process trả về `0`, upload toàn bộ run directory bằng `HF_TOKEN` đã
+được load trong kernel. Truyền token trực tiếp cho SDK, không đưa token vào
+command line hoặc state/log:
+
+```python
+from huggingface_hub import HfApi
+
+returncode = process.wait()
+if returncode != 0:
+    raise RuntimeError(f"DBSS run failed with code {returncode}")
+api = HfApi(token=HF_TOKEN)
+api.create_repo(
+    repo_id=HF_REPO_ID,
+    repo_type="dataset",
+    exist_ok=True,
+)
+api.upload_folder(
+    folder_path=RUN_DIR,
+    path_in_repo=EXPECTED_FULL_SHA,
+    repo_id=HF_REPO_ID,
+    repo_type="dataset",
+)
+```
 
 ## 7. Scheduled handoff
 
@@ -224,4 +262,5 @@ runner còn có thể đang test hoặc ghi summary.
 - Chỉ một GPU training process.
 - Work-dir/HF folder không ghi đè run trước.
 - Log, best checkpoint và metrics tồn tại.
+- Hugging Face folder theo exact SHA đã upload hoàn tất.
 - Không có secret trong source, output hoặc tài liệu.
