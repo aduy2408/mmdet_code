@@ -37,6 +37,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--limit', type=int, default=0)
     parser.add_argument('--image-size', type=int, default=768, choices=(512, 768))
+    parser.add_argument(
+        '--variants',
+        default=','.join(VARIANTS),
+        help=f"Comma-separated variants: {', '.join(VARIANTS)}.")
     parser.add_argument('--amp', action='store_true')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--test-only', action='store_true')
@@ -215,8 +219,12 @@ def run_variant(variant: str, args: argparse.Namespace,
 
 def main() -> None:
     args = parse_args()
+    variants = levir.comma_list(args.variants)
+    unknown = sorted(set(variants) - set(VARIANTS))
+    if unknown:
+        raise ValueError(f"Unknown variants: {', '.join(unknown)}")
     dataset_out, image_dir = levir.prepare_coco_dataset(args)
-    for variant in VARIANTS:
+    for variant in variants:
         if args.dry_run:
             print('CONFIG', variant, write_config(
                 variant, args, dataset_out, image_dir))
