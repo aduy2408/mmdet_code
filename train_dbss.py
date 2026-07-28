@@ -135,6 +135,7 @@ def write_config(
         cfg.param_scheduler = []
         cfg.default_hooks.checkpoint.update(
             by_epoch=False, interval=args.pilot_iters, save_best=None)
+        cfg.default_hooks.logger.interval = 1
     output = Path(cfg.work_dir) / 'patched_config.py'
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg.dump(str(output))
