@@ -161,13 +161,19 @@ def write_config(
         feature_stride=8,
         seed=args.seed)
     if pilot_round is not None:
+        warmup = [
+            scheduler for scheduler in cfg.param_scheduler
+            if scheduler.type == 'LinearLR'
+        ]
+        for scheduler in warmup:
+            scheduler.end = min(50, args.pilot_iters)
         cfg.work_dir = str(
             Path(args.work_dir) / '_pilot' / variant / f'round_{pilot_round}')
         cfg.train_cfg = dict(
             type='IterBasedTrainLoop',
             max_iters=args.pilot_iters,
             val_interval=args.pilot_iters + 1)
-        cfg.param_scheduler = []
+        cfg.param_scheduler = warmup
         cfg.default_hooks.checkpoint.update(
             by_epoch=False, interval=args.pilot_iters, save_best=None)
         cfg.default_hooks.logger.interval = 1
