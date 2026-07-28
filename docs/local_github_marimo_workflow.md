@@ -1,12 +1,12 @@
 # Local → GitHub → Marimo workflow
 
-Runbook này mô tả flow dùng cho PAHR/LEVIR-Ship. Mục tiêu là bảo đảm source
+Runbook này mô tả flow dùng cho DBSS/LEVIR-Ship. Mục tiêu là bảo đảm source
 được kiểm thử và định danh bằng Git SHA trước khi notebook dùng nó, đồng thời
 không chạy chồng experiment trên một GPU.
 
 ## 1. Làm việc local
 
-Làm việc trên branch `haar` và kiểm tra trạng thái trước khi sửa:
+Làm việc trên branch `dbss` và kiểm tra trạng thái trước khi sửa:
 
 ```bash
 git status --short --branch
@@ -20,14 +20,14 @@ Môi trường chuẩn:
 
 ```bash
 .venv-mmdet/bin/python -m pytest \
-  mmdetection/projects/pahr/tests/test_pahr.py -q
+  mmdetection/projects/dbss/tests/test_dbss.py -q
 ```
 
 Trước commit:
 
 ```bash
-.venv-mmdet/bin/python train_all_haar.py \
-  --variants <variant-list> \
+.venv-mmdet/bin/python train_dbss.py \
+  --variants baseline,ridge,softmax,ridge_haar \
   --image-size 768 \
   --epochs 20 \
   --data-root LevirShipData \
@@ -35,8 +35,7 @@ Trước commit:
   --batch-size 8 \
   --num-workers 4 \
   --work-dir mmdetection/work_dirs/<dry-run-dir> \
-  --dry-run \
-  --skip-upload
+  --dry-run
 
 git diff --check
 ```
@@ -53,19 +52,19 @@ Stage danh sách file tường minh:
 git add <file-1> <file-2>
 git diff --cached --check
 git diff --cached --stat
-git commit -m "feat(pahr): <imperative summary>"
+git commit -m "feat(dbss): <imperative summary>"
 ```
 
 Nếu HTTPS remote không có credential, push bằng SSH mà không cần đổi remote:
 
 ```bash
-git push git@github.com:aduy2408/mmdet_code.git haar:haar
+git push git@github.com:aduy2408/mmdet_code.git dbss:dbss
 ```
 
 Xác nhận remote chứa đúng commit:
 
 ```bash
-git ls-remote origin refs/heads/haar
+git ls-remote git@github.com:aduy2408/mmdet_code.git refs/heads/dbss
 ```
 
 Ghi lại full SHA. Không cho Marimo pull dựa trên mô tả như “latest” hoặc chỉ
@@ -80,7 +79,7 @@ returncode = active_process.poll()
 ```
 
 - `None`: process vẫn chạy; không pull và không launch job mới.
-- `0`: train/test/upload đã hoàn tất sạch.
+- `0`: train/test đã hoàn tất sạch.
 - Khác `0`: dừng handoff và đọc log/traceback.
 
 Khi cần queue tuần tự, worker gọi `active_process.wait()` thay vì polling GPU
@@ -94,7 +93,7 @@ Từ live kernel, chạy Git trong `/marimo/mmdet_code`:
 import subprocess
 
 subprocess.run(
-    ["git", "pull", "--ff-only", "origin", "haar"],
+    ["git", "pull", "--ff-only", "origin", "dbss"],
     cwd="/marimo/mmdet_code",
     check=True,
 )
@@ -146,7 +145,7 @@ log_handle = open(RUN_LOG, "a", buffering=1)
 process = subprocess.Popen(
     [
         "/marimo/mmdet-venv/bin/python",
-        "/marimo/mmdet_code/train_all_haar.py",
+        "/marimo/mmdet_code/train_dbss.py",
         "--variants", VARIANT,
         "--image-size", "768",
         "--epochs", "20",
@@ -156,12 +155,9 @@ process = subprocess.Popen(
         "--batch-size", "8",
         "--num-workers", "4",
         "--work-dir", RUN_DIR,
-        "--skip-test",
-        "--hf-repo-id", "duyle2408/fcos_test_haar",
-        "--hf-repo-type", "dataset",
     ],
     cwd="/marimo/mmdet_code",
-    env={**os.environ, "HF_TOKEN": hf_token},
+    env=os.environ.copy(),
     stdout=log_handle,
     stderr=subprocess.STDOUT,
     start_new_session=True,
@@ -177,7 +173,7 @@ nên báo:
 - Best validation mAP/AP50/AP75.
 - Log tail.
 - Số traceback/OOM.
-- Checkpoint, predictions và upload completion.
+- Checkpoint, predictions và test completion.
 
 ## 7. Scheduled handoff
 
@@ -203,7 +199,7 @@ Worker thực hiện:
 
 State JSON nằm trong work directory của experiment, không commit vào Git.
 Không dùng thời gian ước lượng hoặc file `epoch_20.pth` thay cho process exit:
-runner còn có thể đang test hoặc upload.
+runner còn có thể đang test hoặc ghi summary.
 
 ## 8. Failure recovery
 
@@ -211,8 +207,8 @@ runner còn có thể đang test hoặc upload.
 - **Git pull lỗi:** không dùng source đang có; sửa dirty worktree hoặc remote
   trước.
 - **SHA mismatch:** coi là hard failure.
-- **Upload lỗi:** model có thể train xong nhưng workflow chưa hoàn tất; retry
-  upload, không train lại.
+- **Ghi summary lỗi:** model có thể train/test xong nhưng workflow chưa hoàn
+  tất; tạo lại summary từ checkpoint và logs, không train lại.
 - **Resume:** chỉ dùng khi generated config, optimizer và LR schedule giống
   run bị gián đoạn.
 - **Kernel restart:** kiểm tra state JSON và PID trước khi rerun launcher cell.
