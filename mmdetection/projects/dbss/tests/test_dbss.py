@@ -1,4 +1,5 @@
 from pathlib import Path
+import sys
 
 import pytest
 import torch
@@ -151,6 +152,65 @@ def test_diversity_fallback_always_returns_requested_bases():
     assert selected.unique().numel() == 8
 
 
+def test_variable_selector_stops_instead_of_forcing_k():
+    module = DBSSFPN(
+        in_channels=[2, 4, 8, 16],
+        out_channels=4,
+        num_outs=5,
+        start_level=1,
+        add_extra_convs='on_output',
+        embed_channels=3,
+        candidate_grid=(3, 3),
+        shortlist_size=9,
+        num_bases=8,
+        hidden_channels=4,
+        selector_mode='variable_k',
+        basis_similarity_threshold=0.9)
+    candidates = torch.tensor([[1.0, 0.0, 0.0]]).repeat(9, 1)
+    selected = module._select_bases(
+        torch.linspace(1, 0, 9), candidates)
+    assert selected.tolist() == [0]
+
+
+def test_mixed_variable_basis_counts_are_finite():
+    module = neck(selector_mode='variable_k')
+    p3 = torch.randn(2, 4, 8, 8)
+    _, aux = module.enhance(p3, [(8, 8), (4, 5)])
+    assert aux['basis_count'].shape == (2, )
+    assert torch.all((aux['basis_count'] >= 1)
+                     & (aux['basis_count'] <= module.num_bases))
+    assert torch.isfinite(aux['residual']).all()
+
+
+def test_random_selection_is_seeded_and_learned_control_skips_projection(
+        monkeypatch):
+    module = neck(residual_mode='random_bases')
+    scores = torch.arange(4, dtype=torch.float32)
+    candidates = torch.eye(4, 3)
+    torch.manual_seed(7)
+    first = module._indices(scores, candidates)
+    torch.manual_seed(7)
+    assert torch.equal(first, module._indices(scores, candidates))
+
+    learned = neck(residual_mode='learned_control')
+    monkeypatch.setattr(
+        learned, '_project',
+        lambda *args, **kwargs: pytest.fail('projection must not run'))
+    _, aux = learned.enhance(torch.randn(1, 4, 8, 8))
+    assert aux['residual'].shape == (1, 3, 8, 8)
+
+
+def test_direction_weight_ratio_uses_channel_split():
+    module = neck()
+    with torch.no_grad():
+        module.direction[0].weight[:, :4].fill_(2)
+        module.direction[0].weight[:, 4:].fill_(1)
+    _, aux = module.enhance(torch.randn(1, 4, 8, 8))
+    expected = module.direction[0].weight[:, 4:].norm()
+    expected /= module.direction[0].weight[:, :4].norm()
+    assert torch.allclose(aux['direction_weight_ratio'], expected)
+
+
 @pytest.mark.parametrize('mode', ['ridge', 'softmax'])
 def test_projection_is_finite_and_differentiable(mode):
     module = neck(projection_mode=mode)
@@ -188,8 +248,8 @@ def test_haar_only_changes_magnitude_context():
     _, haar_aux = haar.enhance(p3)
     assert 'haar_reliability_rms' not in plain_aux
     assert torch.isfinite(haar_aux['haar_reliability_rms'])
-    assert plain_aux['selected_indices'].shape == haar_aux[
-        'selected_indices'].shape
+    assert len(plain_aux['selected_indices']) == len(
+        haar_aux['selected_indices'])
 
 
 def test_center_sampling_and_separation_empty_gt():
@@ -287,3 +347,10 @@ def test_configs_load():
     assert direction_options.decay_mult == 0
     assert softmax.model.neck.projection_mode == 'softmax'
     assert haar.model.neck.use_haar_reliability
+
+
+def test_falsification_matrix_has_twelve_unique_arms():
+    sys.path.insert(0, str(Path(__file__).parents[4]))
+    from train_dbss import FALSIFICATION_VARIANTS
+    assert len(FALSIFICATION_VARIANTS) == 12
+    assert len(set(FALSIFICATION_VARIANTS.values())) == 12

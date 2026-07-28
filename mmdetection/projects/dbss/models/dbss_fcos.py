@@ -48,7 +48,7 @@ class DBSSFCOS(FCOS):
 
     def _extract_feat_with_dbss_aux(
             self, batch_inputs: Tensor, batch_data_samples: SampleList
-    ) -> tuple[tuple[Tensor, ...], dict[str, Tensor]]:
+    ) -> tuple[tuple[Tensor, ...], dict]:
         backbone_features = self.backbone(batch_inputs)
         return self.neck.forward_with_aux(
             backbone_features,
@@ -70,7 +70,7 @@ class DBSSFCOS(FCOS):
         return sampled.squeeze(0).squeeze(-1).transpose(0, 1)
 
     def separation_objective(
-            self, aux: dict[str, Tensor],
+            self, aux: dict,
             batch_data_samples: SampleList) -> dict[str, Tensor]:
         pre_p3 = aux['pre_p3']
         post_p3 = aux['post_p3']
@@ -130,6 +130,17 @@ class DBSSFCOS(FCOS):
             batch_inputs, batch_data_samples)
         losses = self.bbox_head.loss(features, batch_data_samples)
         losses.update(self.separation_objective(aux, batch_data_samples))
+        losses.update(
+            dbss_displacement_ratio=aux['displacement_ratio'].detach(),
+            dbss_basis_count=aux['basis_count'].float().mean().detach(),
+            dbss_basis_max_cosine=aux['basis_max_cosine'].mean().detach(),
+            dbss_basis_effective_rank=aux[
+                'basis_effective_rank'].mean().detach(),
+            dbss_gamma_mean=aux['gamma_mean'].mean().detach(),
+            dbss_gamma_std=aux['gamma_std'].mean().detach(),
+            dbss_residual_rms=aux['residual_rms'].mean().detach(),
+            dbss_direction_weight_ratio=aux[
+                'direction_weight_ratio'].detach())
         return losses
 
     def predict(
