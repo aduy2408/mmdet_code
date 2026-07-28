@@ -79,6 +79,8 @@ class DBSSFPN(FPN):
         self.temperature = float(temperature)
         self.gamma_max = float(gamma_max)
         self.use_haar_reliability = bool(use_haar_reliability)
+        self._ridge_retry_count = 0
+        self._ridge_lstsq_count = 0
 
         channels = self.out_channels
         self.embedding = nn.Conv2d(channels, embed_channels, 1)
@@ -181,13 +183,40 @@ class DBSSFPN(FPN):
                     device_type=tokens.device.type, enabled=False):
                 tokens32 = tokens.float()
                 bases32 = bases.float()
-                gram = bases32 @ bases32.transpose(0, 1)
-                gram = gram + self.ridge_lambda * torch.eye(
-                    bases.shape[0], device=bases.device, dtype=torch.float32)
+                if not torch.isfinite(tokens32).all():
+                    raise FloatingPointError(
+                        'DBSS ridge tokens contain non-finite values')
+                if not torch.isfinite(bases32).all():
+                    raise FloatingPointError(
+                        'DBSS ridge bases contain non-finite values')
+                base_gram = bases32 @ bases32.transpose(0, 1)
                 rhs = bases32 @ tokens32.transpose(0, 1)
-                coefficients = torch.linalg.solve(gram, rhs)
+                if not torch.isfinite(base_gram).all():
+                    raise FloatingPointError(
+                        'DBSS ridge Gram matrix contains non-finite values')
+                if not torch.isfinite(rhs).all():
+                    raise FloatingPointError(
+                        'DBSS ridge RHS contains non-finite values')
+                identity = torch.eye(
+                    bases.shape[0], device=bases.device, dtype=torch.float32)
+                gram = base_gram + self.ridge_lambda * identity
+                coefficients, info = torch.linalg.solve_ex(
+                    gram, rhs, check_errors=False)
+                if int(info.item()) != 0:
+                    self._ridge_retry_count += 1
+                    gram = base_gram + 1e-2 * identity
+                    coefficients, info = torch.linalg.solve_ex(
+                        gram, rhs, check_errors=False)
+                if int(info.item()) != 0:
+                    self._ridge_lstsq_count += 1
+                    coefficients = torch.linalg.lstsq(
+                        gram, rhs).solution
                 projected = coefficients.transpose(0, 1) @ bases32
-            return projected.to(original_dtype)
+            projected = projected.to(original_dtype)
+            if not torch.isfinite(projected).all():
+                raise FloatingPointError(
+                    'DBSS ridge projection contains non-finite values')
+            return projected
 
         normalized_tokens = F.normalize(tokens, dim=-1)
         normalized_bases = F.normalize(bases, dim=-1)
@@ -341,8 +370,14 @@ class DBSSFPN(FPN):
     ) -> tuple[Tensor, dict[str, Tensor]]:
         valid_shapes = self._normalize_valid_shapes(p3, valid_shapes)
         embedding = self._embed(p3)
+        retry_start = self._ridge_retry_count
+        lstsq_start = self._ridge_lstsq_count
         residual, aux = self._background_residual(
             p3, embedding, valid_shapes)
+        aux['ridge_retry'] = p3.new_tensor(
+            self._ridge_retry_count - retry_start)
+        aux['ridge_lstsq_fallback'] = p3.new_tensor(
+            self._ridge_lstsq_count - lstsq_start)
 
         direction = self.direction(torch.cat((p3, residual), dim=1))
         magnitude_context = [residual]

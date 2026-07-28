@@ -139,6 +139,9 @@ class DBSSFCOS(FCOS):
             dbss_gamma_mean=aux['gamma_mean'].mean().detach(),
             dbss_gamma_std=aux['gamma_std'].mean().detach(),
             dbss_residual_rms=aux['residual_rms'].mean().detach(),
+            dbss_ridge_retry=aux['ridge_retry'].detach(),
+            dbss_ridge_lstsq_fallback=aux[
+                'ridge_lstsq_fallback'].detach(),
             dbss_direction_weight_ratio=aux[
                 'direction_weight_ratio'].detach())
         return losses
