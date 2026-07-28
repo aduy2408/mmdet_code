@@ -7,7 +7,7 @@ from mmengine.config import Config, ConfigDict
 from mmengine.structures import InstanceData
 
 from mmdet.structures import DetDataSample
-from projects.pahr import PAHRFCOS, PAHRFPN
+from projects.pahr import HaarC2FusionFPN, PAHRFCOS, PAHRFPN
 from train_all_haar import VARIANTS, scale_schedule
 
 
@@ -90,6 +90,50 @@ def test_haar_round_trip_signed_and_odd_validation():
     assert torch.isfinite(feature.grad).all()
     with pytest.raises(ValueError, match='even P3 size'):
         PAHRFPN.haar(torch.randn(1, 3, 7, 8))
+
+
+def test_c2_fusion_haar_round_trip_identity_and_gradients():
+    c2 = torch.randn(1, 4, 24, 24)
+    bands = HaarC2FusionFPN.haar(c2)
+    assert bands[0].shape == (1, 4, 12, 12)
+    assert any((band < 0).any() for band in bands[1:])
+    assert torch.allclose(
+        HaarC2FusionFPN.inverse_haar(*bands), c2, atol=1e-6)
+
+    module = HaarC2FusionFPN(
+        in_channels=[4, 8, 16, 32],
+        out_channels=4,
+        start_level=1,
+        add_extra_convs='on_output',
+        num_outs=5,
+        fusion_channels=4)
+    module.init_weights()
+    inputs = tuple(
+        torch.randn(1, channels, size, size)
+        for channels, size in zip((4, 8, 16, 32), (24, 12, 6, 3)))
+    baseline = super(HaarC2FusionFPN, module).forward(inputs)
+    identity, aux = module.forward_with_aux(inputs)
+    assert all(torch.equal(left, right)
+               for left, right in zip(identity, baseline))
+    assert aux['band_rms'].shape == (4, )
+    assert aux['correction_ratio'] == 0
+
+    module.fusion_mixer[-1].weight.data.fill_(0.01)
+    changed, _ = module.forward_with_aux(inputs)
+    assert not torch.equal(changed[0], baseline[0])
+    assert all(torch.equal(left, right)
+               for left, right in zip(changed[1:], baseline[1:]))
+    changed[0].sum().backward()
+    assert module.c2_lateral.weight.grad is not None
+    assert torch.isfinite(module.c2_lateral.weight.grad).all()
+    assert module.fusion_mixer[0].weight.grad is not None
+
+    with pytest.raises(ValueError, match='even C2 size'):
+        module.forward_with_aux((
+            torch.randn(1, 4, 23, 24),
+            torch.randn(1, 8, 12, 12),
+            torch.randn(1, 16, 6, 6),
+            torch.randn(1, 32, 3, 3)))
 
 
 def test_zero_init_is_exact_fpn_and_only_p3_changes():

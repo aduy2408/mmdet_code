@@ -1,3 +1,3 @@
-from .models import PAHRFCOS, PAHRFPN
+from .models import HaarC2FusionFPN, PAHRFCOS, PAHRFPN
 
-__all__ = ['PAHRFCOS', 'PAHRFPN']
+__all__ = ['HaarC2FusionFPN', 'PAHRFCOS', 'PAHRFPN']
