@@ -115,6 +115,30 @@ def test_zero_init_is_exact_fpn_and_only_p3_changes():
                for left, right in zip(changed[1:], baseline[1:]))
 
 
+def test_p2_fpn_identity_and_level_isolation():
+    module = PAHRFPN(
+        in_channels=[1, 2, 4, 8],
+        out_channels=4,
+        num_outs=5,
+        start_level=0,
+        locator_channels=2,
+        detail_channels=2,
+        use_output_gate=False)
+    module.init_weights()
+    inputs = tuple(
+        torch.randn(1, channels, size, size)
+        for channels, size in zip((1, 2, 4, 8), (32, 16, 8, 4)))
+    baseline = super(PAHRFPN, module).forward(inputs)
+    identity = module(inputs)
+    assert all(torch.equal(left, right)
+               for left, right in zip(identity, baseline))
+    module.detail_mixer[-1].bias.data.fill_(0.1)
+    changed = module(inputs)
+    assert not torch.equal(changed[0], baseline[0])
+    assert all(torch.equal(left, right)
+               for left, right in zip(changed[1:], baseline[1:]))
+
+
 def test_output_conv_gets_gradient_at_identity_init():
     module = neck()
     p3 = torch.randn(1, 4, 8, 8, requires_grad=True)

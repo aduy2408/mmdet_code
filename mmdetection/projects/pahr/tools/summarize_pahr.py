@@ -98,6 +98,7 @@ def tiny_statistics(annotation_path: Path, prediction_path: Path,
         'tiny_center_error_median_px': (
             float(errors.median()) if errors.numel() else None),
     }
+    return statistics
 
 
 def correction_statistics(config: Config, checkpoint: str,
