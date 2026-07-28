@@ -163,10 +163,10 @@ def write_config(
     if pilot_round is not None:
         warmup = [
             scheduler for scheduler in cfg.param_scheduler
-            if scheduler.type == 'LinearLR'
+            if scheduler.type in {'ConstantLR', 'LinearLR'}
         ]
         for scheduler in warmup:
-            scheduler.end = min(50, args.pilot_iters)
+            scheduler.end = args.pilot_iters
         cfg.work_dir = str(
             Path(args.work_dir) / '_pilot' / variant / f'round_{pilot_round}')
         cfg.train_cfg = dict(
