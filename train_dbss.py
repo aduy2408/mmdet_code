@@ -256,7 +256,8 @@ def dbss_diagnostics(config: Path, checkpoint: Path) -> dict[str, Any]:
             'displacement_ratio', 'basis_max_cosine',
             'basis_effective_rank', 'basis_count', 'gamma_mean', 'gamma_std',
             'residual_rms', 'gap_pre', 'gap_post', 'gap_gain',
-            'active_ratio', 'direction_weight_ratio')
+            'active_ratio', 'direction_weight_ratio', 'ridge_retry',
+            'ridge_lstsq_fallback')
     }
     basis_histogram: dict[str, int] = {}
     latencies = []
@@ -283,6 +284,9 @@ def dbss_diagnostics(config: Path, checkpoint: Path) -> dict[str, Any]:
                 values[key].append(float(objective[f'dbss_{key}']))
             values['direction_weight_ratio'].append(
                 float(aux['direction_weight_ratio']))
+            values['ridge_retry'].append(float(aux['ridge_retry']))
+            values['ridge_lstsq_fallback'].append(
+                float(aux['ridge_lstsq_fallback']))
             for count in aux['basis_count'].tolist():
                 label = str(int(count))
                 basis_histogram[label] = basis_histogram.get(label, 0) + 1

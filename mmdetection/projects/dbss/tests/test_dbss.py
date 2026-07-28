@@ -224,6 +224,36 @@ def test_projection_is_finite_and_differentiable(mode):
     assert torch.isfinite(basis.grad).all()
 
 
+def test_ridge_retry_and_lstsq_fallback_have_finite_gradients(monkeypatch):
+    module = neck()
+    calls = 0
+
+    def singular_solve(left, right, check_errors=False):
+        nonlocal calls
+        calls += 1
+        return torch.zeros_like(right), torch.ones(
+            (), dtype=torch.int32, device=left.device)
+
+    monkeypatch.setattr(torch.linalg, 'solve_ex', singular_solve)
+    tokens = torch.randn(7, 3, requires_grad=True)
+    bases = torch.ones(2, 3, requires_grad=True)
+    output = module._project(tokens, bases)
+    output.square().mean().backward()
+    assert calls == 2
+    assert module._ridge_retry_count == 1
+    assert module._ridge_lstsq_count == 1
+    assert torch.isfinite(tokens.grad).all()
+    assert torch.isfinite(bases.grad).all()
+
+
+def test_ridge_rejects_non_finite_inputs():
+    module = neck()
+    tokens = torch.randn(7, 3)
+    tokens[0, 0] = torch.nan
+    with pytest.raises(FloatingPointError, match='tokens'):
+        module._project(tokens, torch.randn(2, 3))
+
+
 def test_two_steps_reach_dbss_branches():
     module = neck()
     module.init_weights()
@@ -238,6 +268,24 @@ def test_two_steps_reach_dbss_branches():
     assert module.embedding.weight.grad is not None
     assert module.magnitude[0].weight.grad is not None
     assert torch.isfinite(module.embedding.weight.grad).all()
+
+
+def test_two_detector_steps_accept_negative_images():
+    model = detector()
+    model.init_weights()
+    model.train()
+    optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
+    images = torch.randn(1, 3, 64, 64)
+    samples = [sample([], img_shape=(64, 64))]
+    for _ in range(2):
+        optimizer.zero_grad(set_to_none=True)
+        losses = model.loss(images, samples)
+        total, _ = model.parse_losses(losses)
+        assert torch.isfinite(total)
+        total.backward()
+        optimizer.step()
+    assert model.neck.direction[-1].weight.grad is not None
+    assert torch.isfinite(model.neck.direction[-1].weight.grad).all()
 
 
 def test_haar_only_changes_magnitude_context():
@@ -308,23 +356,28 @@ def test_detector_loss_and_forward_smoke(mode):
     assert len(outputs) == 3
 
 
+@pytest.mark.parametrize('dtype', [torch.float16, torch.bfloat16])
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA AMP')
-def test_ridge_autocast_uses_fp32_solve_and_restores_dtype(monkeypatch):
+def test_ridge_autocast_uses_fp32_solve_and_restores_dtype(
+        monkeypatch, dtype):
+    if dtype == torch.bfloat16 and not torch.cuda.is_bf16_supported():
+        pytest.skip('CUDA device does not support BF16')
     module = neck().cuda()
     seen_dtypes = []
-    original_solve = torch.linalg.solve
+    original_solve = torch.linalg.solve_ex
 
-    def checked_solve(left, right):
+    def checked_solve(left, right, check_errors=False):
         seen_dtypes.append((left.dtype, right.dtype))
-        return original_solve(left, right)
+        return original_solve(
+            left, right, check_errors=check_errors)
 
-    monkeypatch.setattr(torch.linalg, 'solve', checked_solve)
-    tokens = torch.randn(7, 3, device='cuda', dtype=torch.float16)
-    bases = torch.randn(2, 3, device='cuda', dtype=torch.float16)
-    with torch.autocast('cuda', dtype=torch.float16):
+    monkeypatch.setattr(torch.linalg, 'solve_ex', checked_solve)
+    tokens = torch.randn(7, 3, device='cuda', dtype=dtype)
+    bases = torch.randn(2, 3, device='cuda', dtype=dtype)
+    with torch.autocast('cuda', dtype=dtype):
         output = module._project(tokens, bases)
     assert seen_dtypes == [(torch.float32, torch.float32)]
-    assert output.dtype == torch.float16
+    assert output.dtype == dtype
     assert torch.isfinite(output).all()
 
 
