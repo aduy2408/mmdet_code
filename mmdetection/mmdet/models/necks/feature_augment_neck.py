@@ -50,6 +50,94 @@ class MorphologicalEnhancement(BaseModule):
         return x + self.mixer(mixer_input)
 
 
+@MODELS.register_module()
+class LMSCE(BaseModule):
+    """Local morphological-statistical consensus enhancement."""
+
+    _valid_modes = {'raw', 'morphology', 'ring', 'consensus'}
+
+    def __init__(self,
+                 channels: int,
+                 kernel_size: int = 3,
+                 mode: str = 'consensus',
+                 variance_floor: float = 1e-4,
+                 eps: float = 1e-6,
+                 residual_scale: float = 1.0,
+                 init_cfg: OptConfigType = None) -> None:
+        super().__init__(init_cfg=init_cfg)
+        if kernel_size != 3:
+            raise ValueError('LMSCE currently supports only kernel_size=3')
+        if mode not in self._valid_modes:
+            raise ValueError(
+                f'mode must be one of {sorted(self._valid_modes)}, got {mode!r}')
+        if variance_floor < 0 or eps <= 0 or residual_scale < 0:
+            raise ValueError('variance_floor and residual_scale must be '
+                             'non-negative and eps > 0')
+        self.kernel_size = kernel_size
+        self.mode = mode
+        self.variance_floor = float(variance_floor)
+        self.eps = float(eps)
+        self.residual_scale = float(residual_scale)
+        ring_kernel = torch.ones(channels, 1, 3, 3)
+        ring_kernel[:, :, 1, 1] = 0
+        self.register_buffer('ring_kernel', ring_kernel, persistent=False)
+        self.transform = nn.Sequential(
+            nn.Conv2d(
+                channels, channels, 3, padding=1, groups=channels, bias=False),
+            nn.SiLU(),
+            nn.Conv2d(channels, channels, 1, bias=False),
+            nn.Conv2d(channels, channels, 1, bias=False),
+        )
+        nn.init.zeros_(self.transform[-1].weight)
+
+    @staticmethod
+    def _max_pool_replicate(x: Tensor) -> Tensor:
+        x = F.pad(x, (1, 1, 1, 1), mode='replicate')
+        return F.max_pool2d(x, 3, stride=1)
+
+    def _erode(self, x: Tensor) -> Tensor:
+        return -self._max_pool_replicate(-x)
+
+    def _dilate(self, x: Tensor) -> Tensor:
+        return self._max_pool_replicate(x)
+
+    def _ring_stats(self, x: Tensor) -> tuple[Tensor, Tensor]:
+        padded = F.pad(x, (1, 1, 1, 1), mode='replicate')
+        kernel = self.ring_kernel.to(device=x.device, dtype=x.dtype)
+        sum_x = F.conv2d(padded, kernel, groups=x.shape[1])
+        sum_x2 = F.conv2d(padded.square(), kernel, groups=x.shape[1])
+        ring_mean = sum_x / 8
+        ring_var = (sum_x2 / 8 - ring_mean.square()).clamp_min(0)
+        return ring_mean, ring_var
+
+    def _evidence(self, x: Tensor) -> tuple[Tensor, Tensor, Tensor]:
+        x = x.float()
+        opening = self._dilate(self._erode(x))
+        morphology = F.relu(x - opening)
+
+        ring_mean, ring_var = self._ring_stats(x)
+        ring_std = (ring_var.clamp_min(self.variance_floor) +
+                    self.eps).sqrt()
+        morphology = morphology / ring_std
+        ring = F.relu((x - ring_mean) / ring_std)
+        consensus = 2 * morphology * ring / (
+            morphology + ring + self.eps)
+        return morphology, ring, consensus
+
+    def forward(self, x: Tensor) -> Tensor:
+        if self.mode == 'raw':
+            evidence = x
+        else:
+            morphology, ring, consensus = self._evidence(x)
+            evidence = {
+                'morphology': morphology,
+                'ring': ring,
+                'consensus': consensus,
+            }[self.mode]
+        return x + self.residual_scale * self.transform(
+            evidence.to(dtype=x.dtype))
+
+
 class UpBlock(nn.Module):
     """Small reconstruction upsample block used by DGFE."""
 
@@ -240,6 +328,7 @@ class FeatureAugmentNeck(BaseModule):
                  levels: Sequence[int] = (0, ),
                  out_channels: int | Sequence[int] | None = None,
                  morphology: OptConfigType = None,
+                 lmsce: OptConfigType = None,
                  dgfe: OptConfigType = None,
                  api: OptConfigType = None,
         init_cfg: OptConfigType = None) -> None:
@@ -248,6 +337,7 @@ class FeatureAugmentNeck(BaseModule):
         self.levels = tuple(int(level) for level in levels)
         channels = self._resolve_channels(out_channels)
         self.morphology_modules = nn.ModuleDict()
+        self.lmsce_modules = nn.ModuleDict()
         self.dgfe_modules = nn.ModuleDict()
         self.api_modules_by_level = nn.ModuleDict()
 
@@ -259,6 +349,11 @@ class FeatureAugmentNeck(BaseModule):
                 cfg.setdefault('type', 'MorphologicalEnhancement')
                 cfg.setdefault('channels', level_channels)
                 self.morphology_modules[str(level)] = MODELS.build(cfg)
+            if lmsce is not None:
+                cfg = dict(lmsce)
+                cfg.setdefault('type', 'LMSCE')
+                cfg.setdefault('channels', level_channels)
+                self.lmsce_modules[str(level)] = MODELS.build(cfg)
             if dgfe is not None:
                 cfg = dict(dgfe)
                 cfg.setdefault('type', 'FeatureDGFE')
@@ -316,6 +411,8 @@ class FeatureAugmentNeck(BaseModule):
             key = str(level)
             if key in self.morphology_modules:
                 outs[level] = self.morphology_modules[key](outs[level])
+            if key in self.lmsce_modules:
+                outs[level] = self.lmsce_modules[key](outs[level])
             if key in self.dgfe_modules:
                 if batch_inputs is None:
                     raise RuntimeError('DGFE requires batch_inputs.')

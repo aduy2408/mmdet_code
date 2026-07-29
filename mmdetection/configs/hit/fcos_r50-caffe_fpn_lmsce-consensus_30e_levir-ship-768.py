@@ -1,0 +1,23 @@
+_base_ = './fcos_r50-caffe_fpn_30e_levir-ship-768.py'
+
+model = dict(
+    neck=dict(
+        _delete_=True,
+        type='FeatureAugmentNeck',
+        base_neck=dict(
+            type='FPN',
+            in_channels=[256, 512, 1024, 2048],
+            out_channels=256,
+            start_level=1,
+            add_extra_convs='on_output',
+            num_outs=5,
+            relu_before_extra_convs=True),
+        out_channels=256,
+        levels=(0, ),
+        lmsce=dict(
+            type='LMSCE',
+            kernel_size=3,
+            mode='consensus',
+            variance_floor=1e-4,
+            eps=1e-6)))
+work_dir = 'work_dirs/lmsce_p3_768/consensus'

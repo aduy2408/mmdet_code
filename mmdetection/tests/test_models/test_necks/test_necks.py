@@ -5,7 +5,7 @@ from torch.nn.modules.batchnorm import _BatchNorm
 
 from mmdet.models.necks import (FPG, FPN, FPN_CARAFE, NASFCOS_FPN, NASFPN, SSH,
                                 YOLOXPAFPN, ChannelMapper, DilatedEncoder,
-                                DyHead, FeatureAugmentNeck,
+                                DyHead, FeatureAugmentNeck, LMSCE,
                                 MorphologicalEnhancement, SSDNeck, YOLOV3Neck)
 
 
@@ -755,6 +755,104 @@ def test_feature_augment_neck_morphology_only_changes_p3():
     optimizer = torch.optim.SGD(neck.morphology_modules['0'].parameters(), 1)
     neck(feats)[0].sum().backward()
     optimizer.step()
+    actual = neck(feats)
+    assert not torch.equal(actual[0], expected[0])
+    for level in range(1, 4):
+        assert torch.equal(actual[level], expected[level])
+
+
+def test_lmsce_evidence_and_initialization():
+    module = LMSCE(2)
+    assert all(conv.bias is None for conv in module.transform
+               if isinstance(conv, torch.nn.Conv2d))
+    assert torch.count_nonzero(module.transform[-1].weight) == 0
+
+    x = torch.zeros(1, 2, 7, 7, requires_grad=True)
+    x.data[0, 0, 3, 3] = 6
+    x.data[0, 1, 2:5, 2:5] = 6
+    morphology, ring, consensus = module._evidence(x)
+    assert morphology[0, 0, 3, 3] > 0
+    assert morphology[0, 1, 3, 3] == 0
+    assert torch.isfinite(consensus).all()
+
+    opened_peak = module._dilate(module._erode(x.float()))
+    assert opened_peak[0, 0, 3, 3] == 0
+    assert opened_peak[0, 1, 3, 3] == 6
+    corner = torch.tensor([[[[1., 2.], [3., 4.]]]])
+    assert torch.equal(
+        module._erode(corner),
+        torch.tensor([[[[1., 1.], [1., 1.]]]]))
+    assert torch.equal(
+        module._dilate(corner),
+        torch.tensor([[[[4., 4.], [4., 4.]]]]))
+    channel_0 = opened_peak[:, :1].clone()
+    x.data[0, 1] = 100
+    assert torch.equal(
+        module._dilate(module._erode(x.float()))[:, :1], channel_0)
+
+    out = module(x)
+    assert torch.equal(out, x)
+    out.sum().backward()
+    assert torch.isfinite(module.transform[-1].weight.grad).all()
+    assert torch.count_nonzero(module.transform[-1].weight.grad) > 0
+    for layer in (module.transform[0], module.transform[2]):
+        assert layer.weight.grad is not None
+        assert torch.count_nonzero(layer.weight.grad) == 0
+
+    with pytest.raises(ValueError):
+        LMSCE(1, kernel_size=5)
+    with pytest.raises(ValueError):
+        LMSCE(1, mode='unknown')
+    with pytest.raises(ValueError):
+        LMSCE(1, residual_scale=-1)
+
+
+def test_lmsce_ring_excludes_center_and_consensus_invariants():
+    module = LMSCE(1)
+    x = torch.arange(49, dtype=torch.float32).reshape(1, 1, 7, 7)
+    x_changed = x.clone()
+    x_changed[..., 3, 3] = 1e6
+
+    mean, var = module._ring_stats(x)
+    changed_mean, changed_var = module._ring_stats(x_changed)
+    assert torch.allclose(mean[..., 3, 3], changed_mean[..., 3, 3])
+    assert torch.allclose(var[..., 3, 3], changed_var[..., 3, 3])
+
+    q = torch.tensor(3.0)
+    zero = torch.tensor(0.0)
+
+    def harmonic(a, b):
+        return 2 * a * b / (a + b + module.eps)
+
+    assert harmonic(zero, q) == 0
+    assert harmonic(q, zero) == 0
+    assert torch.allclose(harmonic(q, q), q, atol=module.eps)
+
+    for value in (torch.ones(1, 1, 7, 7), x_changed,
+                  x_changed * 1e4):
+        assert torch.isfinite(module._evidence(value)[-1]).all()
+    assert module._evidence(x.half())[0].dtype == torch.float32
+
+
+def test_feature_augment_neck_lmsce_only_changes_p3():
+    feats = tuple(
+        torch.rand(1, channels, size, size)
+        for channels, size in zip((8, 16, 32, 64), (32, 16, 8, 4)))
+    base = FPN(
+        in_channels=[8, 16, 32, 64], out_channels=8, num_outs=4)
+    expected = base(feats)
+    neck = FeatureAugmentNeck(
+        base_neck=dict(
+            type='FPN',
+            in_channels=[8, 16, 32, 64],
+            out_channels=8,
+            num_outs=4),
+        out_channels=8,
+        levels=(0, ),
+        lmsce=dict(mode='consensus'))
+    neck.base_neck.load_state_dict(base.state_dict())
+    assert all(torch.equal(a, b) for a, b in zip(neck(feats), expected))
+    neck.lmsce_modules['0'].transform[-1].weight.data.fill_(0.1)
     actual = neck(feats)
     assert not torch.equal(actual[0], expected[0])
     for level in range(1, 4):
