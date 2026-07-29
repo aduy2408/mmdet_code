@@ -676,12 +676,12 @@ Nguồn artifact:
 [lmsce-p3-levir-ablation](https://huggingface.co/datasets/duyle2408/lmsce-p3-levir-ablation).
 Các số sau là **best validation**, chưa phải test metrics.
 
-| Variant | Best val mAP | Best val AP75 | Best val AP-small |
-|---|---:|---:|---:|
-| Raw-P3 | 0.284 | 0.115 | 0.284 |
-| Morphology-only | 0.282 | 0.104 | 0.283 |
-| Ring-only | 0.286 | 0.106 | 0.285 |
-| **Consensus** | **0.289** | **0.120** | **0.289** |
+| Variant | Best val mAP | Best val AP50 | Best val AP75 | Best val AP-small |
+|---|---:|---:|---:|---:|
+| Raw-P3 | 0.284 | **0.775** | 0.115 | 0.284 |
+| Morphology-only | 0.282 | 0.772 | 0.104 | 0.283 |
+| Ring-only | 0.286 | 0.766 | 0.106 | 0.285 |
+| **Consensus** | **0.289** | 0.756 | **0.120** | **0.289** |
 
 Consensus vượt raw `+0.005 mAP` và vượt cue đơn tốt nhất (ring) `+0.003 mAP`,
 nên qua gate screening:
@@ -697,12 +697,12 @@ Norm correction đo trên một validation batch tại checkpoint consensus ch�
 strength sweep được **fresh-train** từ đầu; kết quả post-hoc scaling không
 được dùng để kết luận.
 
-| Fresh-trained variant | Best val mAP | Best val AP75 | Best val AP-small | Δ mAP vs consensus |
-|---|---:|---:|---:|---:|
-| Residual scale \(\alpha=2\) | 0.281 | 0.113 | 0.282 | -0.008 |
-| Residual scale \(\alpha=4\) | 0.284 | 0.127 | 0.283 | -0.005 |
-| **ZeroConv LR×5** | **0.298** | 0.112 | **0.297** | **+0.009** |
-| ZeroConv LR×10 | 0.294 | **0.128** | 0.294 | +0.005 |
+| Fresh-trained variant | Best val mAP | Best val AP50 | Best val AP75 | Best val AP-small | Δ mAP vs consensus |
+|---|---:|---:|---:|---:|---:|
+| Residual scale \(\alpha=2\) | 0.281 | 0.754 | 0.113 | 0.282 | -0.008 |
+| Residual scale \(\alpha=4\) | 0.284 | 0.743 | 0.127 | 0.283 | -0.005 |
+| **ZeroConv LR×5** | **0.298** | **0.807** | 0.112 | **0.297** | **+0.009** |
+| ZeroConv LR×10 | 0.294 | 0.767 | **0.128** | 0.294 | +0.005 |
 
 Tăng residual scale trực tiếp không tăng mAP. LR×5 tốt nhất về mAP/AP-small,
 còn LR×10 cân bằng hơn cho strict localization vì đồng thời vượt consensus
