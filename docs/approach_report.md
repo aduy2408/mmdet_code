@@ -2,11 +2,12 @@
 
 ## 1. Phạm vi và baseline chung
 
-Báo cáo này tổng hợp code ở năm branch `dbss`, `guided_alignment`, `haar`,
-`hard_transport` và `rcfn_ltmr`. Các hướng đều cố gắng cải thiện đặc trưng mức
-thấp của detector cho tàu nhỏ, chủ yếu tại P3 của FPN. Baseline được dùng nhiều
-nhất là FCOS với ResNet-50-Caffe + FPN, một lớp `ship`, ảnh được resize về
-512×512 hoặc 768×768 tùy experiment; resolution được ghi riêng cho từng run.
+Báo cáo này tổng hợp code ở các branch `dbss`, `guided_alignment`, `haar`,
+`hard_transport`, `rcfn_ltmr` và `open_close`. Các hướng đều cố gắng cải thiện
+đặc trưng mức thấp của detector cho tàu nhỏ, chủ yếu tại P3 của FPN. Baseline
+được dùng nhiều nhất là FCOS với ResNet-50-Caffe + FPN, một lớp `ship`, ảnh
+được resize về 512×512 hoặc 768×768 tùy experiment; resolution được ghi riêng
+cho từng run.
 
 LEVIR-Ship được chuyển sang COCO và chia theo **scene** để tránh các crop của
 cùng một ảnh nguồn rơi vào nhiều split. Metric trong các bảng dưới đây là kết
@@ -46,6 +47,8 @@ trên Hugging Face, không lấy từ tên checkpoint hay metric validation.
 | HIT probe/warmup/detached/joint | FCOS R50-FPN | Intended 512 | Config chính 12 epoch, seed 42; joint có seed 43 | Có config, **không có test artifact** | Chưa confirm stage nào chạy xong |
 | RCFN-R2, LTMR-L1 | FCOS R50-FPN | 512 | 30 epoch, seed 42 | Có test JSON | Baseline cùng schedule; 768; nhiều seed |
 | PG-RCFN: R2/Aux/H/CH/low-weight/floor | FCOS R50-FPN | 512 | 30 epoch, seed 42 | Controlled ablation cùng repo | 768; nhiều seed; detector khác |
+| Morphology positive/negative/both/Conv3×3 | FCOS R50-FPN | 768 | 30 epoch, seed 42 | Có test output live, **không có artifact HF** | Bias/gamma/control confounded; nhiều seed |
+| Positive top-hat vs raw-P3 matched control | FCOS R50-FPN | 768 | 30 epoch, seed 42 | **Đang chạy lại**, chưa có test result | Kết quả test; nhiều seed |
 
 Artifact hiện tại chủ yếu là **single-seed (42)**. Không method nào đã được
 xác minh đầy đủ ở cả 512 và 768 với ít nhất ba seed. `guided_alignment` và
@@ -552,7 +555,79 @@ floor/low-weight variant không giữ được mức tăng, và hai R2 artifact 
 khác nhau; chỉ nên kết luận trong từng protocol, chưa xem đây là kết quả
 đa-seed. PG-RCFN chưa được confirm ở 768, seed 43/44 hoặc detector khác FCOS.
 
-## 7. So sánh các approach
+## 7. `open_close` — Local Morphological P3 Enhancement
+
+### Ý tưởng và implementation ban đầu
+
+Tiny ship được giả thuyết là local extremum trên một số channel P3. Module chỉ
+sửa output index 0 của FPN (`start_level=1`, tương ứng P3 stride 8), giữ nguyên
+P4–P7. Dilation và erosion được tính channel-wise bằng max pooling:
+
+\[
+D_k(X)=\operatorname{MaxPool}_k(X),\qquad
+E_k(X)=-\operatorname{MaxPool}_k(-X).
+\]
+
+Positive top-hat dùng
+\[
+T^+=\operatorname{ReLU}(X-D_k(E_k(X))),
+\]
+còn negative top-hat dùng
+\[
+T^-=\operatorname{ReLU}(E_k(D_k(X))-X).
+\]
+
+Lượt đầu thử `positive`, `negative`, `both=T^++T^-` và full Conv3×3 control.
+Residual ban đầu có dạng `P3 + gamma·mixer(input)`, với learnable
+`gamma=0`. Mixer morphology là Conv1×1 C→C; control là full Conv3×3 C→C.
+
+### Kết quả lượt đầu và confound
+
+Các số dưới đây được đọc từ test output của live Marimo session đã mất; không
+có upload Hugging Face nên chỉ xem là kết quả tạm thời, không phải artifact
+công khai có thể tái kiểm tra.
+
+| Variant | Best val epoch | Test mAP | Test AP50 | Test AP75 | Test AP-small |
+|---|---:|---:|---:|---:|---:|
+| Positive | 26 | 0.261 | 0.719 | **0.101** | **0.259** |
+| Negative | 16 | 0.254 | 0.711 | 0.069 | 0.253 |
+| Both | 10 | 0.255 | 0.711 | 0.091 | 0.254 |
+| Conv3×3 | 9 | **0.261** | 0.718 | 0.092 | 0.258 |
+
+Lượt này chưa falsify sạch morphology vì:
+
+- Mixer dùng `bias=True`; top-hat bằng zero vẫn có thể tạo channel offset.
+- `gamma=0` chặn gradient mixer ở iteration đầu, trong khi gamma học từ random
+  projection chưa được tối ưu.
+- Conv3×3 control có 590,080 tham số, gần chín lần mixer morphology 65,792
+  tham số; hai nhánh không capacity-matched.
+- `both` cộng hai residual không dấu trước cùng mixer, làm mất identity peak và
+  hole. Negative-only đã giảm mạnh AP75 nên không tiếp tục nhánh này.
+
+### Lượt falsification matched control đang chạy
+
+Commit `4ad2a17f` thu hẹp API còn đúng hai mode:
+
+\[
+\begin{aligned}
+\text{positive: }&P3'=P3+\operatorname{ZeroConv}_{1\times1}(T^+),\\
+\text{raw: }&P3'=P3+\operatorname{ZeroConv}_{1\times1}(P3).
+\end{aligned}
+\]
+
+Hai mixer đều C→C, `bias=False`, weight zero-init và có đúng 65,536 tham số.
+Output ban đầu bằng chính xác baseline nhưng mixer nhận gradient ngay backward
+đầu tiên. Negative, both, gamma và full Conv3×3 control đã bị xóa. Protocol là
+FCOS R50-Caffe FPN, 768×768, 30 epoch, seed 42; chạy tuần tự positive rồi raw,
+chọn best validation checkpoint và chỉ sau đó đánh giá test.
+
+Session Marimo đầu tiên bị mất trước khi hoàn tất. Run đang được khởi động lại
+trong work directory `morphology_matched_sha4ad2a17f_retry`; chưa có test
+metric tại thời điểm cập nhật báo cáo và không cấu hình upload Hugging Face.
+Chỉ tiếp tục hướng này nếu positive cao hơn raw ở cả test mAP và test AP-small;
+nếu không thì đóng hướng morphology, không thêm Gaussian map hay multi-scale.
+
+## 8. So sánh các approach
 
 | Branch / method | Vùng can thiệp | Cơ chế chính | Supervision bổ sung | Có tác động inference? | Mục tiêu |
 |---|---|---|---|---|---|
@@ -564,8 +639,9 @@ khác nhau; chỉ nên kết luận trong từng protocol, chưa xem đây là k
 | `rcfn_ltmr` / RCFN-R2 | P3 | Local-background standardization + residual contrast | Detection loss | Có | Tăng tương phản tàu so với nền cục bộ |
 | `rcfn_ltmr` / PG-RCFN | P3 | Gaussian position gate và channel/contrast gate | Gaussian focal position loss | Có | Chỉ áp enhancement gần vị trí tàu |
 | `rcfn_ltmr` / LTMR-L1 | FCOS logits | Positive-vs-local-hard-negative margin | Local margin loss | Không | Cải thiện ranking của tàu nhỏ khi train |
+| `open_close` / positive top-hat | P3 | Channel-wise opening + positive local-extrema residual | Detection loss | Có | So local positive anomaly với raw-P3 matched control |
 
-## 8. Kết luận
+## 9. Kết luận
 
 - Kết quả mạnh nhất trong sweep DBSS 768/seed-42 là ridge γ=0.6
   (`mAP=0.282`), nhưng chưa test 512/multi-seed và falsification chưa chứng
@@ -578,6 +654,9 @@ khác nhau; chỉ nên kết luận trong từng protocol, chưa xem đây là k
   LTMR-L1 chưa cho thấy lợi ích.
 - Chưa có kết quả LEVIR-Ship công khai xác minh được cho `guided_alignment`
   và `hard_transport`; hiện chỉ xác nhận được code/config intended ở 512.
+- Morphology lượt đầu chỉ ngang Conv3×3 ở test mAP và bị ba confound lớn; lượt
+  positive-vs-raw matched control đang chạy lại và chưa có kết quả. Không nên
+  claim gain trước khi positive thắng raw ở cả mAP và AP-small.
 - Các bảng chủ yếu là single-run/single-seed. Bước xác nhận tối thiểu trước
   khi chọn approach là chạy lại baseline và candidate tốt nhất trên cùng
   protocol với ít nhất ba seed, rồi báo mean ± standard deviation.
