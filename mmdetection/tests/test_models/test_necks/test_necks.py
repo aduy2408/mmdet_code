@@ -5,8 +5,8 @@ from torch.nn.modules.batchnorm import _BatchNorm
 
 from mmdet.models.necks import (FPG, FPN, FPN_CARAFE, NASFCOS_FPN, NASFPN, SSH,
                                 YOLOXPAFPN, ChannelMapper, DilatedEncoder,
-                                DyHead, FeatureAugmentNeck, SSDNeck,
-                                YOLOV3Neck)
+                                DyHead, FeatureAugmentNeck,
+                                MorphologicalEnhancement, SSDNeck, YOLOV3Neck)
 
 
 def test_fpn():
@@ -123,6 +123,16 @@ def test_feature_augment_neck():
     neck.perturb_api()
     perturbed_outs = neck(feats, batch_inputs=imgs)
     assert perturbed_outs[0].shape == outs[0].shape
+
+
+def test_fpn_remaining_cases():
+    s = 64
+    in_channels = [8, 16, 32, 64]
+    out_channels = 8
+    feats = [
+        torch.rand(1, channels, s // 2**i, s // 2**i)
+        for i, channels in enumerate(in_channels)
+    ]
 
     # Tests for fpn with no extra convs (pooling is used instead)
     fpn_model = FPN(
@@ -688,3 +698,64 @@ def test_ssh_neck():
     for i in range(len(outs)):
         assert outs[i].shape == \
             (1, out_channels[i], feat_sizes[i], feat_sizes[i])
+
+
+def test_morphological_enhancement():
+    for mode in ('positive', 'negative', 'both', 'conv'):
+        module = MorphologicalEnhancement(2, mode=mode)
+        x = torch.randn(2, 2, 7, 7, requires_grad=True)
+        out = module(x)
+        assert torch.equal(out, x)
+        assert out.shape == x.shape
+        assert out.dtype == x.dtype
+        out.sum().backward()
+        assert module.gamma.grad is not None
+        assert torch.isfinite(module.gamma.grad)
+
+        module.zero_grad()
+        module.gamma.data.fill_(1)
+        module(x).sum().backward()
+        assert module.mixer.weight.grad is not None
+        assert torch.isfinite(module.mixer.weight.grad).all()
+
+    positive = MorphologicalEnhancement(1, mode='positive', gamma_init=1)
+    negative = MorphologicalEnhancement(1, mode='negative', gamma_init=1)
+    positive.mixer.weight.data.fill_(1)
+    positive.mixer.bias.data.zero_()
+    negative.mixer.weight.data.fill_(1)
+    negative.mixer.bias.data.zero_()
+
+    peak = torch.zeros(1, 1, 7, 7)
+    peak[..., 3, 3] = 1
+    assert positive(peak)[..., 3, 3].item() > peak[..., 3, 3].item()
+    hole = torch.ones(1, 1, 7, 7)
+    hole[..., 3, 3] = 0
+    assert negative(hole)[..., 3, 3].item() > hole[..., 3, 3].item()
+
+    with pytest.raises(ValueError):
+        MorphologicalEnhancement(1, kernel_size=2)
+    with pytest.raises(ValueError):
+        MorphologicalEnhancement(1, mode='unknown')
+
+
+def test_feature_augment_neck_morphology_only_changes_p3():
+    feats = tuple(
+        torch.rand(1, channels, size, size)
+        for channels, size in zip((8, 16, 32, 64), (32, 16, 8, 4)))
+    base = FPN(
+        in_channels=[8, 16, 32, 64], out_channels=8, num_outs=4)
+    expected = base(feats)
+    neck = FeatureAugmentNeck(
+        base_neck=dict(
+            type='FPN',
+            in_channels=[8, 16, 32, 64],
+            out_channels=8,
+            num_outs=4),
+        out_channels=8,
+        levels=(0, ),
+        morphology=dict(mode='both', gamma_init=1))
+    neck.base_neck.load_state_dict(base.state_dict())
+    actual = neck(feats)
+    assert not torch.equal(actual[0], expected[0])
+    for level in range(1, 4):
+        assert torch.equal(actual[level], expected[level])

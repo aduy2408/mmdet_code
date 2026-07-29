@@ -13,6 +13,53 @@ from mmdet.registry import MODELS
 from mmdet.utils import ConfigType, OptConfigType
 
 
+@MODELS.register_module()
+class MorphologicalEnhancement(BaseModule):
+    """Enhance local extrema with a zero-initialized residual."""
+
+    _valid_modes = {'positive', 'negative', 'both', 'conv'}
+
+    def __init__(self,
+                 channels: int,
+                 kernel_size: int = 3,
+                 mode: str = 'both',
+                 gamma_init: float = 0.0,
+                 init_cfg: OptConfigType = None) -> None:
+        super().__init__(init_cfg=init_cfg)
+        if kernel_size <= 1 or kernel_size % 2 == 0:
+            raise ValueError('kernel_size must be an odd integer greater than 1')
+        if mode not in self._valid_modes:
+            raise ValueError(
+                f'mode must be one of {sorted(self._valid_modes)}, got {mode!r}')
+        self.kernel_size = int(kernel_size)
+        self.mode = mode
+        size = 3 if mode == 'conv' else 1
+        self.mixer = nn.Conv2d(channels, channels, size, padding=size // 2)
+        self.gamma = nn.Parameter(torch.tensor(float(gamma_init)))
+
+    def _dilate(self, x: Tensor) -> Tensor:
+        return F.max_pool2d(
+            x, self.kernel_size, stride=1, padding=self.kernel_size // 2)
+
+    def _erode(self, x: Tensor) -> Tensor:
+        return -self._dilate(-x)
+
+    def forward(self, x: Tensor) -> Tensor:
+        if self.mode == 'conv':
+            residual = self.mixer(x)
+        else:
+            residual = None
+            if self.mode in {'positive', 'both'}:
+                opening = self._dilate(self._erode(x))
+                residual = F.relu(x - opening)
+            if self.mode in {'negative', 'both'}:
+                closing = self._erode(self._dilate(x))
+                negative = F.relu(closing - x)
+                residual = negative if residual is None else residual + negative
+            residual = self.mixer(residual)
+        return x + self.gamma.to(dtype=x.dtype) * residual
+
+
 class UpBlock(nn.Module):
     """Small reconstruction upsample block used by DGFE."""
 
@@ -202,6 +249,7 @@ class FeatureAugmentNeck(BaseModule):
                  base_neck: ConfigType,
                  levels: Sequence[int] = (0, ),
                  out_channels: int | Sequence[int] | None = None,
+                 morphology: OptConfigType = None,
                  dgfe: OptConfigType = None,
                  api: OptConfigType = None,
         init_cfg: OptConfigType = None) -> None:
@@ -209,12 +257,18 @@ class FeatureAugmentNeck(BaseModule):
         self.base_neck = self._build_base_neck(base_neck)
         self.levels = tuple(int(level) for level in levels)
         channels = self._resolve_channels(out_channels)
+        self.morphology_modules = nn.ModuleDict()
         self.dgfe_modules = nn.ModuleDict()
         self.api_modules_by_level = nn.ModuleDict()
 
         for level in self.levels:
             level_channels = (
                 channels[level] if isinstance(channels, list) else channels)
+            if morphology is not None:
+                cfg = dict(morphology)
+                cfg.setdefault('type', 'MorphologicalEnhancement')
+                cfg.setdefault('channels', level_channels)
+                self.morphology_modules[str(level)] = MODELS.build(cfg)
             if dgfe is not None:
                 cfg = dict(dgfe)
                 cfg.setdefault('type', 'FeatureDGFE')
@@ -270,6 +324,8 @@ class FeatureAugmentNeck(BaseModule):
         outs = list(self.base_neck(inputs))
         for level in self.levels:
             key = str(level)
+            if key in self.morphology_modules:
+                outs[level] = self.morphology_modules[key](outs[level])
             if key in self.dgfe_modules:
                 if batch_inputs is None:
                     raise RuntimeError('DGFE requires batch_inputs.')
