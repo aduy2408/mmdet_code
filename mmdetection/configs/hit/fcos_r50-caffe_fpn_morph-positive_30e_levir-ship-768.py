@@ -17,6 +17,5 @@ model = dict(
         morphology=dict(
             type='MorphologicalEnhancement',
             kernel_size=3,
-            mode='positive',
-            gamma_init=0)))
+            mode='positive')))
 work_dir = 'work_dirs/morphology_p3_768/positive'

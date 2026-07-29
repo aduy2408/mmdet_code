@@ -15,15 +15,14 @@ from mmdet.utils import ConfigType, OptConfigType
 
 @MODELS.register_module()
 class MorphologicalEnhancement(BaseModule):
-    """Enhance local extrema with a zero-initialized residual."""
+    """Compare positive top-hat features with a matched raw-P3 control."""
 
-    _valid_modes = {'positive', 'negative', 'both', 'conv'}
+    _valid_modes = {'positive', 'raw'}
 
     def __init__(self,
                  channels: int,
                  kernel_size: int = 3,
-                 mode: str = 'both',
-                 gamma_init: float = 0.0,
+                 mode: str = 'positive',
                  init_cfg: OptConfigType = None) -> None:
         super().__init__(init_cfg=init_cfg)
         if kernel_size <= 1 or kernel_size % 2 == 0:
@@ -33,9 +32,8 @@ class MorphologicalEnhancement(BaseModule):
                 f'mode must be one of {sorted(self._valid_modes)}, got {mode!r}')
         self.kernel_size = int(kernel_size)
         self.mode = mode
-        size = 3 if mode == 'conv' else 1
-        self.mixer = nn.Conv2d(channels, channels, size, padding=size // 2)
-        self.gamma = nn.Parameter(torch.tensor(float(gamma_init)))
+        self.mixer = nn.Conv2d(channels, channels, 1, bias=False)
+        nn.init.zeros_(self.mixer.weight)
 
     def _dilate(self, x: Tensor) -> Tensor:
         return F.max_pool2d(
@@ -45,19 +43,11 @@ class MorphologicalEnhancement(BaseModule):
         return -self._dilate(-x)
 
     def forward(self, x: Tensor) -> Tensor:
-        if self.mode == 'conv':
-            residual = self.mixer(x)
-        else:
-            residual = None
-            if self.mode in {'positive', 'both'}:
-                opening = self._dilate(self._erode(x))
-                residual = F.relu(x - opening)
-            if self.mode in {'negative', 'both'}:
-                closing = self._erode(self._dilate(x))
-                negative = F.relu(closing - x)
-                residual = negative if residual is None else residual + negative
-            residual = self.mixer(residual)
-        return x + self.gamma.to(dtype=x.dtype) * residual
+        mixer_input = x
+        if self.mode == 'positive':
+            opening = self._dilate(self._erode(x))
+            mixer_input = F.relu(x - opening)
+        return x + self.mixer(mixer_input)
 
 
 class UpBlock(nn.Module):

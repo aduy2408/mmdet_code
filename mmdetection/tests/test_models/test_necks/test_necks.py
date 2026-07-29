@@ -701,36 +701,33 @@ def test_ssh_neck():
 
 
 def test_morphological_enhancement():
-    for mode in ('positive', 'negative', 'both', 'conv'):
-        module = MorphologicalEnhancement(2, mode=mode)
-        x = torch.randn(2, 2, 7, 7, requires_grad=True)
+    modules = [
+        MorphologicalEnhancement(2, mode=mode)
+        for mode in ('positive', 'raw')
+    ]
+    for module in modules:
+        assert module.mixer.bias is None
+        assert torch.count_nonzero(module.mixer.weight) == 0
+        x = torch.zeros(1, 2, 7, 7, requires_grad=True)
+        x.data[..., 3, 3] = 1
         out = module(x)
         assert torch.equal(out, x)
         assert out.shape == x.shape
         assert out.dtype == x.dtype
         out.sum().backward()
-        assert module.gamma.grad is not None
-        assert torch.isfinite(module.gamma.grad)
-
-        module.zero_grad()
-        module.gamma.data.fill_(1)
-        module(x).sum().backward()
         assert module.mixer.weight.grad is not None
         assert torch.isfinite(module.mixer.weight.grad).all()
+        assert torch.count_nonzero(module.mixer.weight.grad) > 0
+    assert sum(p.numel() for p in modules[0].parameters()) == sum(
+        p.numel() for p in modules[1].parameters())
 
-    positive = MorphologicalEnhancement(1, mode='positive', gamma_init=1)
-    negative = MorphologicalEnhancement(1, mode='negative', gamma_init=1)
+    positive = MorphologicalEnhancement(1, mode='positive')
     positive.mixer.weight.data.fill_(1)
-    positive.mixer.bias.data.zero_()
-    negative.mixer.weight.data.fill_(1)
-    negative.mixer.bias.data.zero_()
-
     peak = torch.zeros(1, 1, 7, 7)
     peak[..., 3, 3] = 1
     assert positive(peak)[..., 3, 3].item() > peak[..., 3, 3].item()
-    hole = torch.ones(1, 1, 7, 7)
-    hole[..., 3, 3] = 0
-    assert negative(hole)[..., 3, 3].item() > hole[..., 3, 3].item()
+    flat = torch.ones(1, 1, 7, 7)
+    assert torch.equal(positive(flat), flat)
 
     with pytest.raises(ValueError):
         MorphologicalEnhancement(1, kernel_size=2)
@@ -753,8 +750,11 @@ def test_feature_augment_neck_morphology_only_changes_p3():
             num_outs=4),
         out_channels=8,
         levels=(0, ),
-        morphology=dict(mode='both', gamma_init=1))
+        morphology=dict(mode='positive'))
     neck.base_neck.load_state_dict(base.state_dict())
+    optimizer = torch.optim.SGD(neck.morphology_modules['0'].parameters(), 1)
+    neck(feats)[0].sum().backward()
+    optimizer.step()
     actual = neck(feats)
     assert not torch.equal(actual[0], expected[0])
     for level in range(1, 4):
