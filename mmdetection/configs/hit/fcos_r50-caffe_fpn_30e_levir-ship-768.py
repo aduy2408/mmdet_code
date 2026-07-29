@@ -1,7 +1,7 @@
 _base_ = '../fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py'
 
 metainfo = dict(classes=('ship', ))
-image_root = '../LevirShipData/All Images/'
+image_root = '{{$LEVIR_SHIP_DATA_ROOT:../LevirShipData}}/All Images/'
 annotation_root = 'data/levir_ship_coco/annotations/'
 
 train_pipeline = [
