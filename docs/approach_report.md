@@ -710,6 +710,24 @@ còn LR×10 cân bằng hơn cho strict localization vì đồng thời vượt 
 split và chạy multi-seed trước khi chọn winner; không so các số validation này
 trực tiếp với bảng test của matched top-hat ở trên.
 
+Matched optimization control áp cùng ZeroConv LR multiplier lên raw và ring
+để tách gain riêng của consensus khỏi gain tối ưu hóa chung. Kết quả hiện có:
+
+| Control | Trạng thái | Best val mAP | Best val AP50 | Best val AP75 | Best val AP-small |
+|---|---|---:|---:|---:|---:|
+| Raw LR×5 | Hoàn tất | 0.278 | 0.750 | 0.122 | 0.279 |
+| Ring LR×5 | Đang chạy (epoch 29/30) | 0.283 | 0.753 | 0.113 | 0.281 |
+| Raw LR×10 | Chờ | — | — | — | — |
+| Ring LR×10 | Chờ | — | — | — | — |
+
+So với LR mặc định, Raw LR×5 giảm `0.006 mAP` (`0.284 → 0.278`), còn best
+tạm thời của Ring LR×5 giảm `0.003 mAP` (`0.286 → 0.283`). Trong khi đó,
+Consensus LR×5 tăng `0.009 mAP` (`0.289 → 0.298`) và hiện hơn Raw LR×5
+`0.020 mAP`, hơn Ring LR×5 `0.015 mAP`. Đây là evidence ban đầu rằng gain
+LR×5 không phải lợi ích chung cho mọi residual branch zero-init. Chưa kết
+luận cuối cùng trước khi Ring LR×5 hoàn tất, hai control LR×10 chạy xong và
+evaluator trả cả validation lẫn test metrics.
+
 ## 8. So sánh các approach
 
 | Branch / method | Vùng can thiệp | Cơ chế chính | Supervision bổ sung | Có tác động inference? | Mục tiêu |
