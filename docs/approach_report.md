@@ -48,7 +48,7 @@ trên Hugging Face, không lấy từ tên checkpoint hay metric validation.
 | RCFN-R2, LTMR-L1 | FCOS R50-FPN | 512 | 30 epoch, seed 42 | Có test JSON | Baseline cùng schedule; 768; nhiều seed |
 | PG-RCFN: R2/Aux/H/CH/low-weight/floor | FCOS R50-FPN | 512 | 30 epoch, seed 42 | Controlled ablation cùng repo | 768; nhiều seed; detector khác |
 | Morphology positive/negative/both/Conv3×3 | FCOS R50-FPN | 768 | 30 epoch, seed 42 | Có test output live, **không có artifact HF** | Bias/gamma/control confounded; nhiều seed |
-| Positive top-hat vs raw-P3 matched control | FCOS R50-FPN | 768 | 30 epoch, seed 42 | **Đang chạy lại**, chưa có test result | Kết quả test; nhiều seed |
+| Positive top-hat vs raw-P3 matched control | FCOS R50-FPN | 768 | 30 epoch, seed 42 | **Controlled pair** có test result | Artifact HF; nhiều seed |
 
 Artifact hiện tại chủ yếu là **single-seed (42)**. Không method nào đã được
 xác minh đầy đủ ở cả 512 và 768 với ít nhất ba seed. `guided_alignment` và
@@ -604,7 +604,7 @@ Lượt này chưa falsify sạch morphology vì:
 - `both` cộng hai residual không dấu trước cùng mixer, làm mất identity peak và
   hole. Negative-only đã giảm mạnh AP75 nên không tiếp tục nhánh này.
 
-### Lượt falsification matched control đang chạy
+### Kết quả falsification matched control
 
 Commit `4ad2a17f` thu hẹp API còn đúng hai mode:
 
@@ -621,11 +621,22 @@ Output ban đầu bằng chính xác baseline nhưng mixer nhận gradient ngay 
 FCOS R50-Caffe FPN, 768×768, 30 epoch, seed 42; chạy tuần tự positive rồi raw,
 chọn best validation checkpoint và chỉ sau đó đánh giá test.
 
-Session Marimo đầu tiên bị mất trước khi hoàn tất. Run đang được khởi động lại
-trong work directory `morphology_matched_sha4ad2a17f_retry`; chưa có test
-metric tại thời điểm cập nhật báo cáo và không cấu hình upload Hugging Face.
-Chỉ tiếp tục hướng này nếu positive cao hơn raw ở cả test mAP và test AP-small;
-nếu không thì đóng hướng morphology, không thêm Gaussian map hay multi-scale.
+Session Marimo đầu tiên bị mất trước khi hoàn tất. Run được khởi động lại trong
+work directory `morphology_matched_sha4ad2a17f_retry` và test tự động bằng best
+validation checkpoint. Không có upload Hugging Face; các số dưới đây được lưu
+trong `test_results.json` của live session.
+
+| Variant | Test mAP | Test AP50 | Test AP75 | Test AP-small |
+|---|---:|---:|---:|---:|
+| **Positive top-hat** | **0.261** | **0.716** | **0.084** | **0.260** |
+| Raw-P3 matched control | 0.246 | 0.705 | 0.074 | 0.244 |
+| **Δ Positive** | **+0.015** | **+0.011** | **+0.010** | **+0.016** |
+
+Positive thắng raw ở cả bốn metric và vượt gate định trước ở test mAP lẫn
+AP-small. Kết quả này ủng hộ positive local-extrema input hơn một residual
+Conv1×1 có cùng capacity và initialization. Tuy nhiên đây vẫn là một seed,
+không có artifact HF và chưa so với baseline thuần trong chính lượt retry;
+chưa đủ để claim gain tổng quát hay thêm Gaussian/multi-scale.
 
 ## 8. So sánh các approach
 
@@ -654,9 +665,9 @@ nếu không thì đóng hướng morphology, không thêm Gaussian map hay mult
   LTMR-L1 chưa cho thấy lợi ích.
 - Chưa có kết quả LEVIR-Ship công khai xác minh được cho `guided_alignment`
   và `hard_transport`; hiện chỉ xác nhận được code/config intended ở 512.
-- Morphology lượt đầu chỉ ngang Conv3×3 ở test mAP và bị ba confound lớn; lượt
-  positive-vs-raw matched control đang chạy lại và chưa có kết quả. Không nên
-  claim gain trước khi positive thắng raw ở cả mAP và AP-small.
+- Morphology lượt đầu chỉ ngang Conv3×3 ở test mAP và bị ba confound lớn. Trong
+  matched control, positive thắng raw `+0.015 mAP` và `+0.016 AP-small`, đạt
+  gate định trước; cần baseline thuần và nhiều seed trước khi claim tổng quát.
 - Các bảng chủ yếu là single-run/single-seed. Bước xác nhận tối thiểu trước
   khi chọn approach là chạy lại baseline và candidate tốt nhất trên cùng
   protocol với ít nhất ba seed, rồi báo mean ± standard deviation.
