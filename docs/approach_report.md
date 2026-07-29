@@ -49,7 +49,7 @@ trên Hugging Face, không lấy từ tên checkpoint hay metric validation.
 | PG-RCFN: R2/Aux/H/CH/low-weight/floor | FCOS R50-FPN | 512 | 30 epoch, seed 42 | Controlled ablation cùng repo | 768; nhiều seed; detector khác |
 | Morphology positive/negative/both/Conv3×3 | FCOS R50-FPN | 768 | 30 epoch, seed 42 | Có test output live, **không có artifact HF** | Bias/gamma/control confounded; nhiều seed |
 | Positive top-hat vs raw-P3 matched control | FCOS R50-FPN | 768 | 30 epoch, seed 42 | **Controlled pair** có test result | Artifact HF; nhiều seed |
-| LMSCE raw/morphology/ring/consensus + strength | FCOS R50-FPN | 768 | 30 epoch, seed 42 | Có best-validation artifact HF | Test split; nhiều seed |
+| LMSCE raw/morphology/ring/consensus + strength | FCOS R50-FPN | 768 | 30 epoch, seed 42 | Có validation/test artifact HF | **Đóng hướng** |
 
 Artifact hiện tại chủ yếu là **single-seed (42)**. Không method nào đã được
 xác minh đầy đủ ở cả 512 và 768 với ít nhất ba seed. `guided_alignment` và
@@ -674,14 +674,14 @@ Bốn input ablation là raw \(X\), morphology \(\widetilde M\), ring \(Z\) và
 consensus \(A\). Protocol dùng FCOS R50-Caffe FPN, 768×768, 30 epoch, seed 42.
 Nguồn artifact:
 [lmsce-p3-levir-ablation](https://huggingface.co/datasets/duyle2408/lmsce-p3-levir-ablation).
-Các số sau là **best validation**, chưa phải test metrics.
+Mỗi test result dùng best-validation checkpoint tương ứng, seed 42.
 
-| Variant | Best val mAP | Best val AP50 | Best val AP75 | Best val AP-small |
-|---|---:|---:|---:|---:|
-| Raw-P3 | 0.284 | **0.775** | 0.115 | 0.284 |
-| Morphology-only | 0.282 | 0.772 | 0.104 | 0.283 |
-| Ring-only | 0.286 | 0.766 | 0.106 | 0.285 |
-| **Consensus** | **0.289** | 0.756 | **0.120** | **0.289** |
+| Variant | Val mAP | Val AP50 | Val AP75 | Val AP-small | Test mAP | Test AP50 | Test AP75 | Test AP-small |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Raw-P3 | 0.284 | 0.775 | 0.115 | 0.284 | 0.259 | 0.719 | 0.092 | 0.258 |
+| Morphology-only | 0.282 | 0.772 | 0.104 | 0.283 | 0.240 | 0.691 | 0.072 | 0.241 |
+| Ring-only | 0.286 | 0.766 | 0.106 | 0.285 | 0.252 | 0.712 | 0.078 | 0.250 |
+| Consensus | **0.289** | 0.756 | **0.120** | **0.289** | 0.244 | 0.699 | 0.077 | 0.243 |
 
 Consensus vượt raw `+0.005 mAP` và vượt cue đơn tốt nhất (ring) `+0.003 mAP`,
 nên qua gate screening:
@@ -697,36 +697,34 @@ Norm correction đo trên một validation batch tại checkpoint consensus ch�
 strength sweep được **fresh-train** từ đầu; kết quả post-hoc scaling không
 được dùng để kết luận.
 
-| Fresh-trained variant | Best val mAP | Best val AP50 | Best val AP75 | Best val AP-small | Δ mAP vs consensus |
-|---|---:|---:|---:|---:|---:|
-| Residual scale \(\alpha=2\) | 0.281 | 0.754 | 0.113 | 0.282 | -0.008 |
-| Residual scale \(\alpha=4\) | 0.284 | 0.743 | 0.127 | 0.283 | -0.005 |
-| **ZeroConv LR×5** | **0.298** | **0.807** | 0.112 | **0.297** | **+0.009** |
-| ZeroConv LR×10 | 0.294 | 0.767 | **0.128** | 0.294 | +0.005 |
+| Fresh-trained variant | Val mAP | Val AP50 | Val AP75 | Val AP-small | Test mAP | Test AP50 | Test AP75 | Test AP-small |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Residual scale \(\alpha=2\) | 0.281 | 0.754 | 0.113 | 0.282 | 0.256 | 0.713 | 0.077 | 0.256 |
+| Residual scale \(\alpha=4\) | 0.284 | 0.743 | 0.127 | 0.283 | 0.263 | 0.717 | 0.095 | 0.261 |
+| ZeroConv LR×5 | **0.298** | **0.807** | 0.112 | **0.297** | 0.254 | 0.711 | 0.086 | 0.252 |
+| **ZeroConv LR×10** | 0.294 | 0.767 | **0.128** | 0.294 | **0.265** | **0.731** | **0.108** | **0.265** |
 
-Tăng residual scale trực tiếp không tăng mAP. LR×5 tốt nhất về mAP/AP-small,
-còn LR×10 cân bằng hơn cho strict localization vì đồng thời vượt consensus
-`+0.005 mAP` và `+0.008 AP75`. Hai candidate này cần được test trên cùng test
-split và chạy multi-seed trước khi chọn winner; không so các số validation này
-trực tiếp với bảng test của matched top-hat ở trên.
+LR×5 tốt nhất trên validation nhưng giảm dưới Raw-P3 trên test
+(`0.254 < 0.259 mAP`). LR×10 là LMSCE variant tốt nhất trên test
+(`0.265 mAP`), nhưng lợi thế chỉ `+0.006 mAP` ở một seed.
 
 Matched optimization control áp cùng ZeroConv LR multiplier lên raw và ring
-để tách gain riêng của consensus khỏi gain tối ưu hóa chung. Kết quả hiện có:
+để tách gain riêng của consensus khỏi gain tối ưu hóa chung:
 
-| Control | Trạng thái | Best val mAP | Best val AP50 | Best val AP75 | Best val AP-small |
-|---|---|---:|---:|---:|---:|
-| Raw LR×5 | Hoàn tất | 0.278 | 0.750 | 0.122 | 0.279 |
-| Ring LR×5 | Đang chạy (epoch 29/30) | 0.283 | 0.753 | 0.113 | 0.281 |
-| Raw LR×10 | Chờ | — | — | — | — |
-| Ring LR×10 | Chờ | — | — | — | — |
+| Control | Val mAP | Val AP50 | Val AP75 | Val AP-small | Test mAP | Test AP50 | Test AP75 | Test AP-small |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Raw LR×5 | 0.278 | 0.750 | 0.122 | 0.279 | 0.242 | 0.699 | 0.074 | 0.242 |
+| Ring LR×5 | 0.283 | 0.753 | 0.113 | 0.281 | 0.256 | 0.711 | 0.087 | 0.254 |
+| Raw LR×10 | 0.286 | 0.769 | 0.113 | 0.285 | 0.259 | 0.714 | 0.083 | 0.258 |
+| Ring LR×10 | 0.289 | 0.779 | 0.121 | 0.288 | 0.246 | 0.704 | 0.064 | 0.245 |
 
-So với LR mặc định, Raw LR×5 giảm `0.006 mAP` (`0.284 → 0.278`), còn best
-tạm thời của Ring LR×5 giảm `0.003 mAP` (`0.286 → 0.283`). Trong khi đó,
-Consensus LR×5 tăng `0.009 mAP` (`0.289 → 0.298`) và hiện hơn Raw LR×5
-`0.020 mAP`, hơn Ring LR×5 `0.015 mAP`. Đây là evidence ban đầu rằng gain
-LR×5 không phải lợi ích chung cho mọi residual branch zero-init. Chưa kết
-luận cuối cùng trước khi Ring LR×5 hoàn tất, hai control LR×10 chạy xong và
-evaluator trả cả validation lẫn test metrics.
+Consensus LR×10 hơn matched Raw LR×10 `+0.006 mAP` và Ring LR×10
+`+0.019 mAP` trên test. Tuy nhiên consensus gốc giảm `0.015 mAP` so với
+Raw-P3, LR×5 cũng không vượt Raw-P3, và LR×10 chỉ tạo một margin nhỏ ở
+single seed. Validation ranking không chuyển ổn định sang test ranking.
+Vì evidence generalization yếu và gain còn lại không đủ chắc để biện minh
+thêm sweep, **đóng hướng LMSCE tại đây**: không chạy multi-seed, kernel 5×5,
+tiny-init, attention, alpha hoặc auxiliary loss.
 
 ## 8. So sánh các approach
 
@@ -759,10 +757,11 @@ evaluator trả cả validation lẫn test metrics.
 - Morphology lượt đầu chỉ ngang Conv3×3 ở test mAP và bị ba confound lớn. Trong
   matched control, positive thắng raw `+0.015 mAP` và `+0.016 AP-small`, đạt
   gate định trước; cần baseline thuần và nhiều seed trước khi claim tổng quát.
-- LMSCE consensus đạt best validation `0.289 mAP`, vượt raw `+0.005`. Strength
-  sweep cho LR×5 cao nhất (`0.298 mAP`), còn LR×10 cải thiện cân bằng mAP/AP75
-  (`0.294/0.128`). Đây mới là screening validation seed 42; chưa có controlled
-  test comparison hoặc multi-seed.
+- LMSCE consensus thắng Raw-P3 `+0.005 mAP` trên validation nhưng thua
+  `0.015 mAP` trên test. Consensus LR×10 là variant test tốt nhất
+  (`0.265 mAP`), chỉ hơn matched Raw LR×10 `+0.006` ở seed 42. Hướng LMSCE
+  được đóng vì ranking validation/test thiếu ổn định và evidence chưa đủ mạnh
+  để mở rộng thêm ablation.
 - Các bảng chủ yếu là single-run/single-seed. Bước xác nhận tối thiểu trước
   khi chọn approach là chạy lại baseline và candidate tốt nhất trên cùng
   protocol với ít nhất ba seed, rồi báo mean ± standard deviation.
