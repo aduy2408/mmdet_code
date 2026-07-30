@@ -123,6 +123,29 @@ def summarize(rows, split_crowding=True):
     return result
 
 
+def position_statistics(model, position, samples):
+    """Summarize the learned position map at tiny-object centers."""
+    target, valid = model.position_targets(position, samples)
+    centers = []
+    for index, sample in enumerate(samples):
+        boxes = sample.gt_instances.bboxes
+        boxes = boxes.tensor if hasattr(boxes, 'tensor') else boxes
+        tiny = boxes[model.tiny_mask(boxes, sample.metainfo)]
+        for box in tiny:
+            x = int(((box[0] + box[2]) / (2 * model.position_stride))
+                    .round().clamp(0, position.shape[3] - 1))
+            y = int(((box[1] + box[3]) / (2 * model.position_stride))
+                    .round().clamp(0, position.shape[2] - 1))
+            centers.append(float(position[index, 0, y, x]))
+    background = valid & (target < 0.1)
+    return target, {
+        'center_values': centers,
+        'background_false_count': int(
+            ((position >= 0.5) & background).sum()),
+        'background_count': int(background.sum()),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('config', type=Path)

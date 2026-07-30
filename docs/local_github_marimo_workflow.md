@@ -29,7 +29,7 @@ Trước commit:
 
 ```bash
 .venv-mmdet/bin/python train_dbss.py \
-  --variants ridge_g03,ridge_g06,ridge_g10 \
+  --variants baseline,ridge,softmax,ridge_haar \
   --image-size 768 \
   --epochs 20 \
   --data-root LevirShipData \

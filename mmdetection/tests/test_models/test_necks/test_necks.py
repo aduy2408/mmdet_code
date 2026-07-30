@@ -6,7 +6,8 @@ from torch.nn.modules.batchnorm import _BatchNorm
 from mmdet.models.necks import (FPG, FPN, FPN_CARAFE, NASFCOS_FPN, NASFPN, SSH,
                                 YOLOXPAFPN, ChannelMapper, DilatedEncoder,
                                 DyHead, FeatureAugmentNeck,
-                                MorphologicalEnhancement, SSDNeck, YOLOV3Neck)
+                                MorphologicalEnhancement, SSDNeck,
+                                SubPixelImplicitRefiner, YOLOV3Neck)
 
 
 def test_fpn():
@@ -755,6 +756,53 @@ def test_feature_augment_neck_morphology_only_changes_p3():
     optimizer = torch.optim.SGD(neck.morphology_modules['0'].parameters(), 1)
     neck(feats)[0].sum().backward()
     optimizer.step()
+    actual = neck(feats)
+    assert not torch.equal(actual[0], expected[0])
+    for level in range(1, 4):
+        assert torch.equal(actual[level], expected[level])
+
+
+def test_rcfn_subpixel_refiner_is_finite_and_initially_identity():
+    module = SubPixelImplicitRefiner(channels=8, embed_dim=16)
+    x = torch.rand(2, 8, 16, 16, requires_grad=True)
+
+    initial = module(x)
+    assert torch.equal(initial, x)
+    assert initial.shape == x.shape
+
+    module.zero_conv.weight.data.fill_(0.1)
+    output = module(x)
+    output.sum().backward()
+    assert output.shape == x.shape
+    assert torch.isfinite(output).all()
+    assert x.grad is not None and torch.isfinite(x.grad).all()
+    assert module.attn_heads.weight.grad is not None
+    assert module.inr_mlp[0].weight.grad is not None
+
+
+def test_feature_augment_neck_subpixel_only_changes_p3():
+    feats = tuple(
+        torch.rand(1, channels, size, size)
+        for channels, size in zip((8, 16, 32, 64), (32, 16, 8, 4)))
+    base = FPN(
+        in_channels=[8, 16, 32, 64], out_channels=8, num_outs=4)
+    expected = base(feats)
+    neck = FeatureAugmentNeck(
+        base_neck=dict(
+            type='FPN',
+            in_channels=[8, 16, 32, 64],
+            out_channels=8,
+            num_outs=4),
+        out_channels=8,
+        levels=(0, ),
+        subpixel_inr=dict(embed_dim=16))
+    neck.base_neck.load_state_dict(base.state_dict())
+
+    initial = neck(feats)
+    for level in range(4):
+        assert torch.equal(initial[level], expected[level])
+
+    neck.subpixel_inr_modules['0'].zero_conv.weight.data.fill_(0.1)
     actual = neck(feats)
     assert not torch.equal(actual[0], expected[0])
     for level in range(1, 4):
