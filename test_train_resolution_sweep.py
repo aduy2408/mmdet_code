@@ -3,7 +3,7 @@ from pathlib import Path
 
 from mmengine.config import Config
 
-import train_resolution_sweep as sweep
+import train_all_resolution_sweep as sweep
 
 
 def test_write_config_matrix(tmp_path: Path):
@@ -40,6 +40,8 @@ def test_write_config_matrix(tmp_path: Path):
             assert cfg.resolution_sweep.variant == variant
             assert cfg.resolution_sweep.resolution == resolution
             assert cfg.resolution_sweep.effective_batch == 8
+            assert cfg.resolution_sweep.learning_rate == 0.005
+            assert cfg.optim_wrapper.optimizer.lr == 0.005
             assert cfg.train_dataloader.batch_size == (
                 sweep.MICRO_BATCH[resolution])
             assert cfg.optim_wrapper.accumulative_counts == (

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,7 @@ DEFAULT_VARIANTS = tuple(VARIANTS)
 DEFAULT_RESOLUTIONS = (1024, 1376)
 MICRO_BATCH = {1024: 4, 1376: 2}
 ACCUMULATION = {1024: 2, 1376: 4}
+LEARNING_RATE = 0.005
 
 
 def comma_list(value: str) -> list[str]:
@@ -89,6 +91,7 @@ def write_config(
 
     cfg.train_dataloader.batch_size = MICRO_BATCH[resolution]
     cfg.optim_wrapper.accumulative_counts = ACCUMULATION[resolution]
+    cfg.optim_wrapper.optimizer.lr = LEARNING_RATE
     cfg.auto_scale_lr = dict(enable=False, base_batch_size=16)
     patch_scheduler(cfg, args.epochs)
     cfg.work_dir = str(
@@ -102,6 +105,7 @@ def write_config(
         accumulation=ACCUMULATION[resolution],
         effective_batch=(
             MICRO_BATCH[resolution] * ACCUMULATION[resolution]),
+        learning_rate=LEARNING_RATE,
         git_sha=sha,
     )
     output = Path(cfg.work_dir) / 'patched_config.py'
@@ -139,6 +143,34 @@ def write_state(root: Path, **state: Any) -> None:
 
 def run(command: list[str]) -> None:
     subprocess.run(command, check=True)
+
+
+def upload_run(
+    config: Path,
+    resolution: int,
+    variant: str,
+    args: argparse.Namespace,
+    sha: str,
+) -> None:
+    if args.no_hf_upload:
+        return
+    token = os.environ.get('HF_TOKEN')
+    if not token:
+        raise RuntimeError('HF_TOKEN is required unless --no-hf-upload is set')
+    from huggingface_hub import HfApi
+
+    api = HfApi(token=token)
+    api.create_repo(
+        repo_id=args.hf_repo_id,
+        repo_type='dataset',
+        exist_ok=True,
+    )
+    api.upload_folder(
+        folder_path=str(config.parent),
+        path_in_repo=f'{sha}/{resolution}/{variant}',
+        repo_id=args.hf_repo_id,
+        repo_type='dataset',
+    )
 
 
 def train_config(config: Path, amp: bool) -> None:
@@ -210,6 +242,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--screen-only', action='store_true')
     parser.add_argument('--skip-data-prepare', action='store_true')
+    parser.add_argument(
+        '--hf-repo-id',
+        default='duyle2408/levir-resolution-sweep-1024-1376')
+    parser.add_argument('--no-hf-upload', action='store_true')
     return parser.parse_args()
 
 
@@ -259,6 +295,7 @@ def main() -> None:
         )
         try:
             train_config(config, args.amp)
+            upload_run(config, resolution, variant, args, sha)
         except Exception:
             write_state(
                 state_root,
@@ -280,6 +317,7 @@ def main() -> None:
             keys.append(baseline_key)
         for key in keys:
             test_config(configs[key])
+            upload_run(configs[key], key[0], key[1], args, sha)
             tested.append(list(key))
     write_state(
         state_root,
