@@ -130,11 +130,11 @@ class PhaseCongruencyFPN(BaseModule):
         sum_O_u = odd_k_u.sum(dim=0)
         sum_O_v = odd_k_v.sum(dim=0)
         
-        energy_u = torch.sqrt(sum_E ** 2 + sum_O_u ** 2)
-        energy_v = torch.sqrt(sum_E ** 2 + sum_O_v ** 2)
+        energy_u = torch.sqrt(sum_E ** 2 + sum_O_u ** 2 + 1e-12)
+        energy_v = torch.sqrt(sum_E ** 2 + sum_O_v ** 2 + 1e-12)
         
-        amplitude_u = torch.sqrt(even_k ** 2 + odd_k_u ** 2).sum(dim=0)
-        amplitude_v = torch.sqrt(even_k ** 2 + odd_k_v ** 2).sum(dim=0)
+        amplitude_u = torch.sqrt(even_k ** 2 + odd_k_u ** 2 + 1e-12).sum(dim=0)
+        amplitude_v = torch.sqrt(even_k ** 2 + odd_k_v ** 2 + 1e-12).sum(dim=0)
         
         pc_u = energy_u / (amplitude_u + 1e-4)
         pc_v = energy_v / (amplitude_v + 1e-4)
