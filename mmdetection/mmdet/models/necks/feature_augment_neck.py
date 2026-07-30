@@ -50,6 +50,195 @@ class MorphologicalEnhancement(BaseModule):
         return x + self.mixer(mixer_input)
 
 
+@MODELS.register_module()
+class PhaseCongruencyFPN(BaseModule):
+    """Phase Congruency & Dynamic Fourier Filtering (Phase-FPN)"""
+
+    def __init__(self,
+                 channels: int = 256,
+                 num_masks: int = 4,
+                 init_cfg: OptConfigType = None) -> None:
+        super().__init__(init_cfg=init_cfg)
+        self.channels = channels
+        self.num_masks = num_masks
+        
+        # Learnable Frequency Masks for Phase Congruency
+        self.mask_weights = nn.Parameter(torch.randn(num_masks, 1, 1, 1))
+        # Center frequencies and bandwidths parameters
+        self.f_c = nn.Parameter(torch.rand(num_masks, 1, 1, 1) * 0.5)
+        self.sigma = nn.Parameter(torch.rand(num_masks, 1, 1, 1) * 0.25 + 0.05)
+        
+        self.conv_refine = nn.Sequential(
+            nn.Conv2d(channels, channels, 3, padding=1, groups=channels),
+            nn.SiLU(),
+            nn.Conv2d(channels, channels, 1)
+        )
+        self.gamma = nn.Parameter(torch.zeros(1, channels, 1, 1))
+
+    def forward(self, x: Tensor, batch_inputs: Tensor | None = None) -> Tensor:
+        B, C, H, W = x.shape
+        
+        if batch_inputs is None:
+            # Fallback for unit testing where batch_inputs is not provided
+            img = x.mean(dim=1, keepdim=True)
+        else:
+            # Convert RGB image (B, 3, H_img, W_img) to grayscale (B, 1, H_img, W_img)
+            img = 0.299 * batch_inputs[:, 0:1] + 0.587 * batch_inputs[:, 1:2] + 0.114 * batch_inputs[:, 2:3]
+            
+        B_img, _, H_img, W_img = img.shape
+        
+        # 1. 2D FFT of grayscale input image
+        img_fft = torch.fft.rfft2(img, norm='ortho')
+        amplitude = torch.abs(img_fft)
+        
+        # 2. Quadrature filter pairs over scales
+        W_fft = amplitude.shape[-1]
+        u = torch.fft.fftfreq(H_img, device=img.device).view(H_img, 1)
+        v = torch.fft.rfftfreq(W_img, device=img.device).view(1, W_fft)
+        r = torch.sqrt(u**2 + v**2).clamp(min=1e-6) # (H_img, W_fft)
+        
+        sign_u = torch.sign(u).unsqueeze(0).unsqueeze(1) # (1, 1, H_img, 1)
+        sign_v = torch.sign(v).unsqueeze(0).unsqueeze(1) # (1, 1, 1, W_fft)
+        
+        # Gaussian masks
+        f_c = self.f_c.view(self.num_masks, 1, 1, 1)
+        sigma = self.sigma.view(self.num_masks, 1, 1, 1)
+        r_exp = r.unsqueeze(0)
+        M_k = torch.exp(-((r_exp - f_c) ** 2) / (2 * (sigma ** 2) + 1e-6))
+        
+        weights = torch.softmax(self.mask_weights, dim=0).view(self.num_masks, 1, 1, 1)
+        M_k_w = M_k * weights # (num_masks, 1, H_img, W_fft)
+        
+        # Filtered representations in frequency domain
+        filt_fft = img_fft.unsqueeze(0) * M_k_w.unsqueeze(1) # (num_masks, B, 1, H_img, W_fft)
+        
+        # Inverse transform to get even and odd components
+        even_k = torch.fft.irfft2(filt_fft, s=(H_img, W_img), norm='ortho')
+        odd_k_u = torch.fft.irfft2(filt_fft * (-1j * sign_u), s=(H_img, W_img), norm='ortho')
+        odd_k_v = torch.fft.irfft2(filt_fft * (-1j * sign_v), s=(H_img, W_img), norm='ortho')
+        
+        # Compute Phase Congruency along vertical and horizontal orientations
+        sum_E = even_k.sum(dim=0)
+        sum_O_u = odd_k_u.sum(dim=0)
+        sum_O_v = odd_k_v.sum(dim=0)
+        
+        energy_u = torch.sqrt(sum_E ** 2 + sum_O_u ** 2)
+        energy_v = torch.sqrt(sum_E ** 2 + sum_O_v ** 2)
+        
+        amplitude_u = torch.sqrt(even_k ** 2 + odd_k_u ** 2).sum(dim=0)
+        amplitude_v = torch.sqrt(even_k ** 2 + odd_k_v ** 2).sum(dim=0)
+        
+        pc_u = energy_u / (amplitude_u + 1e-4)
+        pc_v = energy_v / (amplitude_v + 1e-4)
+        
+        pc_map = torch.max(pc_u, pc_v) # (B, 1, H_img, W_img)
+        
+        # 3. Downsample Phase Congruency map to match FPN levels
+        if (H, W) != (H_img, W_img):
+            pc_map_down = F.interpolate(pc_map, size=(H, W), mode='bilinear', align_corners=False)
+        else:
+            pc_map_down = pc_map
+            
+        pc_gate = torch.sigmoid(pc_map_down)
+        
+        # 4. Refine features
+        delta_x = x * pc_gate
+        delta_x = self.conv_refine(delta_x)
+        
+        return x + self.gamma * delta_x
+
+
+@MODELS.register_module()
+class SubPixelImplicitRefiner(BaseModule):
+    """Implicit Sub-Pixel Coordinate Field (SubPixel-INR)"""
+
+    def __init__(self,
+                 channels: int = 256,
+                 embed_dim: int = 16,
+                 init_cfg: OptConfigType = None) -> None:
+        super().__init__(init_cfg=init_cfg)
+        self.channels = channels
+        self.num_bands = 4 # Since enc_dim is 16, 2 coords * 2 (sin/cos) * num_bands = 16
+        
+        # 1. Define sub-pixel offsets for 2x2 local implicit grid
+        offsets = torch.tensor([
+            [-0.25, -0.25], [-0.25, 0.25],
+            [ 0.25, -0.25], [ 0.25, 0.25]
+        ], dtype=torch.float32) # (4, 2)
+        self.register_buffer('offsets', offsets)
+        
+        # 3. Lightweight Implicit Neural Network (INR)
+        self.inr_mlp = nn.Sequential(
+            nn.Conv2d(channels + embed_dim, channels, kernel_size=1),
+            nn.SiLU(),
+            nn.Conv2d(channels, channels, kernel_size=1)
+        )
+        
+        self.attn_heads = nn.Conv2d(channels, 4, kernel_size=1) # Attention weights for 4 sub-pixels
+        self.zero_conv = nn.Conv2d(channels, channels, kernel_size=1)
+        nn.init.zeros_(self.zero_conv.weight)
+        nn.init.zeros_(self.zero_conv.bias)
+
+    def _fourier_encode(self, pos: Tensor) -> Tensor:
+        # pos: (4, 2)
+        scales = (2.0 ** torch.arange(self.num_bands, device=pos.device)).view(1, 1, -1) # (1, 1, num_bands)
+        scaled_pos = pos.unsqueeze(-1) * scales * torch.pi # (4, 2, num_bands)
+        encoded = torch.cat([torch.sin(scaled_pos), torch.cos(scaled_pos)], dim=-1) # (4, 2, 2 * num_bands)
+        return encoded.view(4, -1) # (4, 16)
+
+    def _bilinear_shift(self, x: Tensor, dy: float, dx: float) -> Tensor:
+        # x: (B, C, H, W)
+        # Shift and interpolate features at (y + dy, x + dx) using replicate padding
+        padded = F.pad(x, (1, 1, 1, 1), mode='replicate')
+        
+        ay = abs(dy)
+        ax = abs(dx)
+        
+        h_slice = slice(1, -1)
+        w_slice = slice(1, -1)
+        h_neighbor = slice(0, -2) if dy < 0 else slice(2, None)
+        w_neighbor = slice(0, -2) if dx < 0 else slice(2, None)
+        
+        f_00 = padded[:, :, h_slice, w_slice]
+        f_01 = padded[:, :, h_slice, w_neighbor]
+        f_10 = padded[:, :, h_neighbor, w_slice]
+        f_11 = padded[:, :, h_neighbor, w_neighbor]
+        
+        w_00 = (1.0 - ay) * (1.0 - ax)
+        w_01 = (1.0 - ay) * ax
+        w_10 = ay * (1.0 - ax)
+        w_11 = ay * ax
+        
+        return w_00 * f_00 + w_01 * f_01 + w_10 * f_10 + w_11 * f_11
+
+    def forward(self, x: Tensor) -> Tensor:
+        B, C, H, W = x.shape
+        
+        # Encode coordinates once
+        pos_enc = self._fourier_encode(self.offsets) # (4, 16)
+        
+        # Query spatially interpolated implicit features at 4 sub-pixel locations
+        x_k_list = []
+        for i, (dy, dx) in enumerate(self.offsets.tolist()):
+            x_k_feat = self._bilinear_shift(x, dy, dx) # (B, C, H, W)
+            enc = pos_enc[i].view(1, -1, 1, 1).expand(B, -1, H, W)
+            x_k_list.append(torch.cat([x_k_feat, enc], dim=1))
+            
+        x_k = torch.stack(x_k_list, dim=1) # (B, 4, C + embed_dim, H, W)
+        x_k = x_k.view(B * 4, -1, H, W)
+        
+        # Pass through INR MLP
+        f_k = self.inr_mlp(x_k) # (B * 4, C, H, W)
+        stacked_f = f_k.view(B, 4, C, H, W)
+        
+        # Compute dynamic aggregation weights across sub-pixels
+        attn_logits = self.attn_heads(x) # (B, 4, H, W)
+        attn_weights = torch.softmax(attn_logits, dim=1).unsqueeze(2) # (B, 4, 1, H, W)
+        
+        # Aggregate continuous sub-pixel details back to grid cell
+        delta_x = (stacked_f * attn_weights).sum(dim=1) # (B, C, H, W)
+        
+        return x + self.zero_conv(delta_x)
 class UpBlock(nn.Module):
     """Small reconstruction upsample block used by DGFE."""
 
@@ -242,12 +431,16 @@ class FeatureAugmentNeck(BaseModule):
                  morphology: OptConfigType = None,
                  dgfe: OptConfigType = None,
                  api: OptConfigType = None,
-        init_cfg: OptConfigType = None) -> None:
+                 phase_fpn: OptConfigType = None,
+                 subpixel_inr: OptConfigType = None,
+                 init_cfg: OptConfigType = None) -> None:
         super().__init__(init_cfg=init_cfg)
         self.base_neck = self._build_base_neck(base_neck)
         self.levels = tuple(int(level) for level in levels)
         channels = self._resolve_channels(out_channels)
         self.morphology_modules = nn.ModuleDict()
+        self.phase_fpn_modules = nn.ModuleDict()
+        self.subpixel_inr_modules = nn.ModuleDict()
         self.dgfe_modules = nn.ModuleDict()
         self.api_modules_by_level = nn.ModuleDict()
 
@@ -259,6 +452,16 @@ class FeatureAugmentNeck(BaseModule):
                 cfg.setdefault('type', 'MorphologicalEnhancement')
                 cfg.setdefault('channels', level_channels)
                 self.morphology_modules[str(level)] = MODELS.build(cfg)
+            if phase_fpn is not None:
+                cfg = dict(phase_fpn)
+                cfg.setdefault('type', 'PhaseCongruencyFPN')
+                cfg.setdefault('channels', level_channels)
+                self.phase_fpn_modules[str(level)] = MODELS.build(cfg)
+            if subpixel_inr is not None:
+                cfg = dict(subpixel_inr)
+                cfg.setdefault('type', 'SubPixelImplicitRefiner')
+                cfg.setdefault('channels', level_channels)
+                self.subpixel_inr_modules[str(level)] = MODELS.build(cfg)
             if dgfe is not None:
                 cfg = dict(dgfe)
                 cfg.setdefault('type', 'FeatureDGFE')
@@ -316,6 +519,10 @@ class FeatureAugmentNeck(BaseModule):
             key = str(level)
             if key in self.morphology_modules:
                 outs[level] = self.morphology_modules[key](outs[level])
+            if key in self.phase_fpn_modules:
+                outs[level] = self.phase_fpn_modules[key](outs[level], batch_inputs)
+            if key in self.subpixel_inr_modules:
+                outs[level] = self.subpixel_inr_modules[key](outs[level])
             if key in self.dgfe_modules:
                 if batch_inputs is None:
                     raise RuntimeError('DGFE requires batch_inputs.')
