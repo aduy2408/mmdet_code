@@ -75,52 +75,76 @@ class PhaseCongruencyFPN(BaseModule):
         )
         self.gamma = nn.Parameter(torch.zeros(1, channels, 1, 1))
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, batch_inputs: Tensor | None = None) -> Tensor:
         B, C, H, W = x.shape
-        # 1. Real 2D FFT
-        x_fft = torch.fft.rfft2(x, norm='backward')
-        amplitude = torch.abs(x_fft)
-        phase = torch.angle(x_fft)
-
-        # 2. Estimate Phase Congruency Map in Frequency Domain
-        # Phase alignment measure across channels
-        phase_mean = phase.mean(dim=1, keepdim=True)
-        phase_dev = torch.cos(phase - phase_mean)
         
-        # Generate normalized frequency coordinates for learnable masks
-        # u: vertical frequency [-0.5, 0.5]
-        # v: horizontal frequency [0, 0.5]
+        if batch_inputs is None:
+            # Fallback for unit testing where batch_inputs is not provided
+            img = x.mean(dim=1, keepdim=True)
+        else:
+            # Convert RGB image (B, 3, H_img, W_img) to grayscale (B, 1, H_img, W_img)
+            img = 0.299 * batch_inputs[:, 0:1] + 0.587 * batch_inputs[:, 1:2] + 0.114 * batch_inputs[:, 2:3]
+            
+        B_img, _, H_img, W_img = img.shape
+        
+        # 1. 2D FFT of grayscale input image
+        img_fft = torch.fft.rfft2(img, norm='ortho')
+        amplitude = torch.abs(img_fft)
+        
+        # 2. Quadrature filter pairs over scales
         W_fft = amplitude.shape[-1]
-        u = torch.fft.fftfreq(H, device=x.device).view(H, 1)
-        v = torch.fft.rfftfreq(W, device=x.device).view(1, W_fft)
-        r = torch.sqrt(u**2 + v**2) # (H, W_fft)
+        u = torch.fft.fftfreq(H_img, device=img.device).view(H_img, 1)
+        v = torch.fft.rfftfreq(W_img, device=img.device).view(1, W_fft)
+        r = torch.sqrt(u**2 + v**2).clamp(min=1e-6) # (H_img, W_fft)
         
-        # M_k of shape (num_masks, 1, H, W_fft)
-        M_k = torch.exp(-((r.unsqueeze(0) - self.f_c) ** 2) / (2 * (self.sigma ** 2) + 1e-6))
+        sign_u = torch.sign(u).unsqueeze(0).unsqueeze(1) # (1, 1, H_img, 1)
+        sign_v = torch.sign(v).unsqueeze(0).unsqueeze(1) # (1, 1, 1, W_fft)
         
-        # Weight masks
-        weights = torch.softmax(self.mask_weights, dim=0) # (num_masks, 1, 1, 1)
-        M_k_w = (M_k * weights).unsqueeze(2) # (num_masks, 1, 1, H, W_fft)
+        # Gaussian masks
+        f_c = self.f_c.view(self.num_masks, 1, 1, 1)
+        sigma = self.sigma.view(self.num_masks, 1, 1, 1)
+        r_exp = r.unsqueeze(0)
+        M_k = torch.exp(-((r_exp - f_c) ** 2) / (2 * (sigma ** 2) + 1e-6))
         
-        # Expand amplitude and phase_dev to shape (1, B, C, H, W_fft)
-        amp_exp = amplitude.unsqueeze(0)
-        pdev_exp = phase_dev.unsqueeze(0)
+        weights = torch.softmax(self.mask_weights, dim=0).view(self.num_masks, 1, 1, 1)
+        M_k_w = M_k * weights # (num_masks, 1, H_img, W_fft)
         
-        # Weighted gating sum across masks and channels
-        pc_num = (M_k_w * amp_exp * pdev_exp).sum(dim=0).sum(dim=1, keepdim=True)
-        pc_den = (M_k_w * amp_exp).sum(dim=0).sum(dim=1, keepdim=True)
+        # Filtered representations in frequency domain
+        filt_fft = img_fft.unsqueeze(0) * M_k_w.unsqueeze(1) # (num_masks, B, 1, H_img, W_fft)
         
-        pc_map = pc_num / (pc_den + 1e-6)
-        pc_gate = torch.sigmoid(pc_map)
-
-        # 3. Filter Frequency Representation
-        x_fft_filtered = (amplitude * pc_gate) * torch.exp(1j * phase)
-
-        # 4. Inverse 2D FFT back to Spatial Domain
-        delta_x = torch.fft.irfft2(x_fft_filtered, s=(H, W), norm='backward')
+        # Inverse transform to get even and odd components
+        even_k = torch.fft.irfft2(filt_fft, s=(H_img, W_img), norm='ortho')
+        odd_k_u = torch.fft.irfft2(filt_fft * (-1j * sign_u), s=(H_img, W_img), norm='ortho')
+        odd_k_v = torch.fft.irfft2(filt_fft * (-1j * sign_v), s=(H_img, W_img), norm='ortho')
+        
+        # Compute Phase Congruency along vertical and horizontal orientations
+        sum_E = even_k.sum(dim=0)
+        sum_O_u = odd_k_u.sum(dim=0)
+        sum_O_v = odd_k_v.sum(dim=0)
+        
+        energy_u = torch.sqrt(sum_E ** 2 + sum_O_u ** 2)
+        energy_v = torch.sqrt(sum_E ** 2 + sum_O_v ** 2)
+        
+        amplitude_u = torch.sqrt(even_k ** 2 + odd_k_u ** 2).sum(dim=0)
+        amplitude_v = torch.sqrt(even_k ** 2 + odd_k_v ** 2).sum(dim=0)
+        
+        pc_u = energy_u / (amplitude_u + 1e-4)
+        pc_v = energy_v / (amplitude_v + 1e-4)
+        
+        pc_map = torch.max(pc_u, pc_v) # (B, 1, H_img, W_img)
+        
+        # 3. Downsample Phase Congruency map to match FPN levels
+        if (H, W) != (H_img, W_img):
+            pc_map_down = F.interpolate(pc_map, size=(H, W), mode='bilinear', align_corners=False)
+        else:
+            pc_map_down = pc_map
+            
+        pc_gate = torch.sigmoid(pc_map_down)
+        
+        # 4. Refine features
+        delta_x = x * pc_gate
         delta_x = self.conv_refine(delta_x)
-
-        # 5. Residual connection with zero-init
+        
         return x + self.gamma * delta_x
 
 
@@ -162,17 +186,46 @@ class SubPixelImplicitRefiner(BaseModule):
         encoded = torch.cat([torch.sin(scaled_pos), torch.cos(scaled_pos)], dim=-1) # (4, 2, 2 * num_bands)
         return encoded.view(4, -1) # (4, 16)
 
+    def _bilinear_shift(self, x: Tensor, dy: float, dx: float) -> Tensor:
+        # x: (B, C, H, W)
+        # Shift and interpolate features at (y + dy, x + dx) using replicate padding
+        padded = F.pad(x, (1, 1, 1, 1), mode='replicate')
+        
+        ay = abs(dy)
+        ax = abs(dx)
+        
+        h_slice = slice(1, -1)
+        w_slice = slice(1, -1)
+        h_neighbor = slice(0, -2) if dy < 0 else slice(2, None)
+        w_neighbor = slice(0, -2) if dx < 0 else slice(2, None)
+        
+        f_00 = padded[:, :, h_slice, w_slice]
+        f_01 = padded[:, :, h_slice, w_neighbor]
+        f_10 = padded[:, :, h_neighbor, w_slice]
+        f_11 = padded[:, :, h_neighbor, w_neighbor]
+        
+        w_00 = (1.0 - ay) * (1.0 - ax)
+        w_01 = (1.0 - ay) * ax
+        w_10 = ay * (1.0 - ax)
+        w_11 = ay * ax
+        
+        return w_00 * f_00 + w_01 * f_01 + w_10 * f_10 + w_11 * f_11
+
     def forward(self, x: Tensor) -> Tensor:
         B, C, H, W = x.shape
         
         # Encode coordinates once
         pos_enc = self._fourier_encode(self.offsets) # (4, 16)
         
-        # Query implicit features at 4 sub-pixel locations using vectorized operations
-        enc = pos_enc.view(1, 4, -1, 1, 1).expand(B, -1, -1, H, W)
-        x_expanded = x.unsqueeze(1).expand(-1, 4, -1, -1, -1)
-        x_k = torch.cat([x_expanded, enc], dim=2)
-        x_k = x_k.reshape(B * 4, -1, H, W)
+        # Query spatially interpolated implicit features at 4 sub-pixel locations
+        x_k_list = []
+        for i, (dy, dx) in enumerate(self.offsets.tolist()):
+            x_k_feat = self._bilinear_shift(x, dy, dx) # (B, C, H, W)
+            enc = pos_enc[i].view(1, -1, 1, 1).expand(B, -1, H, W)
+            x_k_list.append(torch.cat([x_k_feat, enc], dim=1))
+            
+        x_k = torch.stack(x_k_list, dim=1) # (B, 4, C + embed_dim, H, W)
+        x_k = x_k.view(B * 4, -1, H, W)
         
         # Pass through INR MLP
         f_k = self.inr_mlp(x_k) # (B * 4, C, H, W)
@@ -469,7 +522,7 @@ class FeatureAugmentNeck(BaseModule):
             if key in self.morphology_modules:
                 outs[level] = self.morphology_modules[key](outs[level])
             if key in self.phase_fpn_modules:
-                outs[level] = self.phase_fpn_modules[key](outs[level])
+                outs[level] = self.phase_fpn_modules[key](outs[level], batch_inputs)
             if key in self.subpixel_inr_modules:
                 outs[level] = self.subpixel_inr_modules[key](outs[level])
             if key in self.dgfe_modules:
