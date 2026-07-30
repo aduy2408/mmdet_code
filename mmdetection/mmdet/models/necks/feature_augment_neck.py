@@ -85,9 +85,17 @@ class PhaseCongruencyFPN(BaseModule):
             # Convert RGB image (B, 3, H_img, W_img) to grayscale (B, 1, H_img, W_img)
             img = 0.299 * batch_inputs[:, 0:1] + 0.587 * batch_inputs[:, 1:2] + 0.114 * batch_inputs[:, 2:3]
             
+        # 3x3 Morphological Positive Top-hat:
+        # Erosion is max pooling of negative image
+        erosion = -F.max_pool2d(-img, kernel_size=3, stride=1, padding=1)
+        # Dilation of erosion:
+        dilation_of_erosion = F.max_pool2d(erosion, kernel_size=3, stride=1, padding=1)
+        # Positive top-hat filter to highlight bright anomalies (ships) and suppress background
+        img = torch.relu(img - dilation_of_erosion)
+            
         B_img, _, H_img, W_img = img.shape
         
-        # 1. 2D FFT of grayscale input image
+        # 1. 2D FFT of top-hat filtered grayscale input image
         img_fft = torch.fft.rfft2(img, norm='ortho')
         amplitude = torch.abs(img_fft)
         
@@ -167,9 +175,10 @@ class SubPixelImplicitRefiner(BaseModule):
         ], dtype=torch.float32) # (4, 2)
         self.register_buffer('offsets', offsets)
         
-        # 3. Lightweight Implicit Neural Network (INR)
+        # 3. Lightweight Implicit Neural Network (INR) with 2 * channels input
+        # (for raw feature x + standardized local contrast x_std)
         self.inr_mlp = nn.Sequential(
-            nn.Conv2d(channels + embed_dim, channels, kernel_size=1),
+            nn.Conv2d(2 * channels + embed_dim, channels, kernel_size=1),
             nn.SiLU(),
             nn.Conv2d(channels, channels, kernel_size=1)
         )
@@ -214,17 +223,37 @@ class SubPixelImplicitRefiner(BaseModule):
     def forward(self, x: Tensor) -> Tensor:
         B, C, H, W = x.shape
         
-        # Encode coordinates once
+        # 1. Local background standardization (RCFN-like local standardized deviation Z) on x
+        # 3x3 uniform sum kernel:
+        kernel = torch.ones((C, 1, 3, 3), device=x.device)
+        sum_3x3 = F.conv2d(x, kernel, padding=1, groups=C)
+        sum_sq_3x3 = F.conv2d(x**2, kernel, padding=1, groups=C)
+        
+        # 8-neighbor ring sum and mean:
+        sum_ring = sum_3x3 - x
+        mean_ring = sum_ring / 8.0
+        
+        # 8-neighbor ring variance:
+        var_ring = (sum_sq_3x3 - x**2) / 8.0 - mean_ring**2
+        std_ring = torch.sqrt(var_ring.clamp(min=1e-6))
+        
+        # Local standardized features to suppress ocean background noise
+        x_std = (x - mean_ring) / (std_ring + 1e-4)
+        
+        # Concatenate raw semantics and local standardized features
+        x_feat = torch.cat([x, x_std], dim=1) # (B, 2*C, H, W)
+        
+        # 2. Encode coordinates once
         pos_enc = self._fourier_encode(self.offsets) # (4, 16)
         
         # Query spatially interpolated implicit features at 4 sub-pixel locations
         x_k_list = []
         for i, (dy, dx) in enumerate(self.offsets.tolist()):
-            x_k_feat = self._bilinear_shift(x, dy, dx) # (B, C, H, W)
+            x_k_feat = self._bilinear_shift(x_feat, dy, dx) # (B, 2*C, H, W)
             enc = pos_enc[i].view(1, -1, 1, 1).expand(B, -1, H, W)
             x_k_list.append(torch.cat([x_k_feat, enc], dim=1))
             
-        x_k = torch.stack(x_k_list, dim=1) # (B, 4, C + embed_dim, H, W)
+        x_k = torch.stack(x_k_list, dim=1) # (B, 4, 2*C + embed_dim, H, W)
         x_k = x_k.view(B * 4, -1, H, W)
         
         # Pass through INR MLP
