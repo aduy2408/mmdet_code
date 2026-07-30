@@ -49,6 +49,7 @@ trên Hugging Face, không lấy từ tên checkpoint hay metric validation.
 | PG-RCFN: R2/Aux/H/CH/low-weight/floor | FCOS R50-FPN | 512 | 30 epoch, seed 42 | Controlled ablation cùng repo | 768; nhiều seed; detector khác |
 | Morphology positive/negative/both/Conv3×3 | FCOS R50-FPN | 768 | 30 epoch, seed 42 | Có test output live, **không có artifact HF** | Bias/gamma/control confounded; nhiều seed |
 | Positive top-hat vs raw-P3 matched control | FCOS R50-FPN | 768 | 30 epoch, seed 42 | **Controlled pair** có test result | Artifact HF; nhiều seed |
+| LMSCE raw/morphology/ring/consensus + strength | FCOS R50-FPN | 768 | 30 epoch, seed 42 | Có validation/test artifact HF | **Đóng hướng** |
 
 Artifact hiện tại chủ yếu là **single-seed (42)**. Không method nào đã được
 xác minh đầy đủ ở cả 512 và 768 với ít nhất ba seed. `guided_alignment` và
@@ -638,6 +639,93 @@ Conv1×1 có cùng capacity và initialization. Tuy nhiên đây vẫn là một
 không có artifact HF và chưa so với baseline thuần trong chính lượt retry;
 chưa đủ để claim gain tổng quát hay thêm Gaussian/multi-scale.
 
+### LMSCE: morphology–contrast consensus
+
+Commit
+`6e479b1024c830c9c01bb80f1889c3d1f2c4b37d`
+thêm **Local Morphological-Statistical Consensus Enhancement (LMSCE)** độc
+lập với module morphology cũ. LMSCE vẫn chỉ sửa P3 và giữ P4–P7 nguyên vẹn.
+Mọi mode dùng chung transformation có cùng capacity:
+
+\[
+\operatorname{DWConv}_{3\times3}\rightarrow\operatorname{SiLU}
+\rightarrow\operatorname{PWConv}_{1\times1}
+\rightarrow\operatorname{ZeroConv}_{1\times1}.
+\]
+
+Morphological opening dùng replicate padding tường minh cho từng erosion và
+dilation. Ring statistics loại cell tâm trực tiếp bằng grouped convolution
+3×3 có trọng số tâm bằng 0. Evidence chạy FP32 với variance floor
+\(10^{-4}\):
+
+\[
+\widetilde M=\frac{\operatorname{ReLU}(X-\operatorname{Open}_3(X))}
+{\sqrt{\max(\sigma_r^2,10^{-4})+10^{-6}}},
+\qquad
+Z=\operatorname{ReLU}\frac{X-\mu_r}
+{\sqrt{\max(\sigma_r^2,10^{-4})+10^{-6}}},
+\]
+
+\[
+A=\frac{2\widetilde MZ}{\widetilde M+Z+10^{-6}}.
+\]
+
+Bốn input ablation là raw \(X\), morphology \(\widetilde M\), ring \(Z\) và
+consensus \(A\). Protocol dùng FCOS R50-Caffe FPN, 768×768, 30 epoch, seed 42.
+Nguồn artifact:
+[lmsce-p3-levir-ablation](https://huggingface.co/datasets/duyle2408/lmsce-p3-levir-ablation).
+Mỗi test result dùng best-validation checkpoint tương ứng, seed 42.
+
+| Variant | Val mAP | Val AP50 | Val AP75 | Val AP-small | Test mAP | Test AP50 | Test AP75 | Test AP-small |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Raw-P3 | 0.284 | 0.775 | 0.115 | 0.284 | 0.259 | 0.719 | 0.092 | 0.258 |
+| Morphology-only | 0.282 | 0.772 | 0.104 | 0.283 | 0.240 | 0.691 | 0.072 | 0.241 |
+| Ring-only | 0.286 | 0.766 | 0.106 | 0.285 | 0.252 | 0.712 | 0.078 | 0.250 |
+| Consensus | **0.289** | 0.756 | **0.120** | **0.289** | 0.244 | 0.699 | 0.077 | 0.243 |
+
+Consensus vượt raw `+0.005 mAP` và vượt cue đơn tốt nhất (ring) `+0.003 mAP`,
+nên qua gate screening:
+\[
+\text{Consensus}>\text{Raw},\qquad
+\text{Consensus}\ge\max(\text{Morphology},\text{Ring}).
+\]
+Tuy nhiên chênh lệch giữa các cue nhỏ và mới có một seed; kết quả chưa chứng
+minh morphology và ring cung cấp information độc lập.
+
+Norm correction đo trên một validation batch tại checkpoint consensus chỉ là
+\(\lVert\Delta P3\rVert/\lVert P3\rVert\approx2.08\times10^{-5}\). Vì vậy
+strength sweep được **fresh-train** từ đầu; kết quả post-hoc scaling không
+được dùng để kết luận.
+
+| Fresh-trained variant | Val mAP | Val AP50 | Val AP75 | Val AP-small | Test mAP | Test AP50 | Test AP75 | Test AP-small |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Residual scale \(\alpha=2\) | 0.281 | 0.754 | 0.113 | 0.282 | 0.256 | 0.713 | 0.077 | 0.256 |
+| Residual scale \(\alpha=4\) | 0.284 | 0.743 | 0.127 | 0.283 | 0.263 | 0.717 | 0.095 | 0.261 |
+| ZeroConv LR×5 | **0.298** | **0.807** | 0.112 | **0.297** | 0.254 | 0.711 | 0.086 | 0.252 |
+| **ZeroConv LR×10** | 0.294 | 0.767 | **0.128** | 0.294 | **0.265** | **0.731** | **0.108** | **0.265** |
+
+LR×5 tốt nhất trên validation nhưng giảm dưới Raw-P3 trên test
+(`0.254 < 0.259 mAP`). LR×10 là LMSCE variant tốt nhất trên test
+(`0.265 mAP`), nhưng lợi thế chỉ `+0.006 mAP` ở một seed.
+
+Matched optimization control áp cùng ZeroConv LR multiplier lên raw và ring
+để tách gain riêng của consensus khỏi gain tối ưu hóa chung:
+
+| Control | Val mAP | Val AP50 | Val AP75 | Val AP-small | Test mAP | Test AP50 | Test AP75 | Test AP-small |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Raw LR×5 | 0.278 | 0.750 | 0.122 | 0.279 | 0.242 | 0.699 | 0.074 | 0.242 |
+| Ring LR×5 | 0.283 | 0.753 | 0.113 | 0.281 | 0.256 | 0.711 | 0.087 | 0.254 |
+| Raw LR×10 | 0.286 | 0.769 | 0.113 | 0.285 | 0.259 | 0.714 | 0.083 | 0.258 |
+| Ring LR×10 | 0.289 | 0.779 | 0.121 | 0.288 | 0.246 | 0.704 | 0.064 | 0.245 |
+
+Consensus LR×10 hơn matched Raw LR×10 `+0.006 mAP` và Ring LR×10
+`+0.019 mAP` trên test. Tuy nhiên consensus gốc giảm `0.015 mAP` so với
+Raw-P3, LR×5 cũng không vượt Raw-P3, và LR×10 chỉ tạo một margin nhỏ ở
+single seed. Validation ranking không chuyển ổn định sang test ranking.
+Vì evidence generalization yếu và gain còn lại không đủ chắc để biện minh
+thêm sweep, **đóng hướng LMSCE tại đây**: không chạy multi-seed, kernel 5×5,
+tiny-init, attention, alpha hoặc auxiliary loss.
+
 ## 8. So sánh các approach
 
 | Branch / method | Vùng can thiệp | Cơ chế chính | Supervision bổ sung | Có tác động inference? | Mục tiêu |
@@ -651,6 +739,7 @@ chưa đủ để claim gain tổng quát hay thêm Gaussian/multi-scale.
 | `rcfn_ltmr` / PG-RCFN | P3 | Gaussian position gate và channel/contrast gate | Gaussian focal position loss | Có | Chỉ áp enhancement gần vị trí tàu |
 | `rcfn_ltmr` / LTMR-L1 | FCOS logits | Positive-vs-local-hard-negative margin | Local margin loss | Không | Cải thiện ranking của tàu nhỏ khi train |
 | `open_close` / positive top-hat | P3 | Channel-wise opening + positive local-extrema residual | Detection loss | Có | So local positive anomaly với raw-P3 matched control |
+| `open_close` / LMSCE | P3 | Consensus giữa positive top-hat và standardized ring contrast | Detection loss | Có | Chỉ enhance vị trí được hai local cue cùng xác nhận |
 
 ## 9. Kết luận
 
@@ -665,9 +754,14 @@ chưa đủ để claim gain tổng quát hay thêm Gaussian/multi-scale.
   LTMR-L1 chưa cho thấy lợi ích.
 - Chưa có kết quả LEVIR-Ship công khai xác minh được cho `guided_alignment`
   và `hard_transport`; hiện chỉ xác nhận được code/config intended ở 512.
-- Morphology lượt đầu chỉ ngang Conv3×3 ở test mAP và bị ba confound lớn. Trong
+- Morphology lượt đầu chỉ ngang Conv3×3 ở test mAP và bị ba confound lớn.w Trong
   matched control, positive thắng raw `+0.015 mAP` và `+0.016 AP-small`, đạt
   gate định trước; cần baseline thuần và nhiều seed trước khi claim tổng quát.
+- LMSCE consensus thắng Raw-P3 `+0.005 mAP` trên validation nhưng thua
+  `0.015 mAP` trên test. Consensus LR×10 là variant test tốt nhất
+  (`0.265 mAP`), chỉ hơn matched Raw LR×10 `+0.006` ở seed 42. Hướng LMSCE
+  được đóng vì ranking validation/test thiếu ổn định và evidence chưa đủ mạnh
+  để mở rộng thêm ablation.
 - Các bảng chủ yếu là single-run/single-seed. Bước xác nhận tối thiểu trước
   khi chọn approach là chạy lại baseline và candidate tốt nhất trên cùng
   protocol với ít nhất ba seed, rồi báo mean ± standard deviation.

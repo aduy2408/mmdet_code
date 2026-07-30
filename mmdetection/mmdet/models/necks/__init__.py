@@ -11,7 +11,9 @@ from .fpn_carafe import FPN_CARAFE
 from .fpn_dropblock import FPN_DropBlock
 from .feature_augment_neck import (AdversarialPerturbationInjection,
                                    FeatureAugmentNeck, FeatureDGFE,
-                                   MorphologicalEnhancement)
+                                   MorphologicalEnhancement,
+                                   PhaseCongruencyFPN,
+                                   SubPixelImplicitRefiner)
 from .hrfpn import HRFPN
 from .nas_fpn import NASFPN
 from .nasfcos_fpn import NASFCOS_FPN
@@ -27,5 +29,6 @@ __all__ = [
     'NASFCOS_FPN', 'RFP', 'YOLOV3Neck', 'FPG', 'DilatedEncoder',
     'CTResNetNeck', 'SSDNeck', 'YOLOXPAFPN', 'DyHead', 'CSPNeXtPAFPN', 'SSH',
     'FPN_DropBlock', 'FeatureAugmentNeck', 'FeatureDGFE',
-    'AdversarialPerturbationInjection', 'MorphologicalEnhancement'
+    'AdversarialPerturbationInjection', 'MorphologicalEnhancement',
+    'PhaseCongruencyFPN', 'SubPixelImplicitRefiner'
 ]

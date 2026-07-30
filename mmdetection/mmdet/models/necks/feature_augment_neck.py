@@ -50,6 +50,144 @@ class MorphologicalEnhancement(BaseModule):
         return x + self.mixer(mixer_input)
 
 
+@MODELS.register_module()
+class PhaseCongruencyFPN(BaseModule):
+    """Phase Congruency & Dynamic Fourier Filtering (Phase-FPN)"""
+
+    def __init__(self,
+                 channels: int = 256,
+                 num_masks: int = 4,
+                 init_cfg: OptConfigType = None) -> None:
+        super().__init__(init_cfg=init_cfg)
+        self.channels = channels
+        self.num_masks = num_masks
+        
+        # Learnable Frequency Masks for Phase Congruency
+        self.mask_weights = nn.Parameter(torch.randn(num_masks, 1, 1, 1))
+        # Center frequencies and bandwidths parameters
+        self.f_c = nn.Parameter(torch.rand(num_masks, 1, 1, 1) * 0.5)
+        self.sigma = nn.Parameter(torch.rand(num_masks, 1, 1, 1) * 0.25 + 0.05)
+        
+        self.conv_refine = nn.Sequential(
+            nn.Conv2d(channels, channels, 3, padding=1, groups=channels),
+            nn.SiLU(),
+            nn.Conv2d(channels, channels, 1)
+        )
+        self.gamma = nn.Parameter(torch.zeros(1, channels, 1, 1))
+
+    def forward(self, x: Tensor) -> Tensor:
+        B, C, H, W = x.shape
+        # 1. Real 2D FFT
+        x_fft = torch.fft.rfft2(x, norm='backward')
+        amplitude = torch.abs(x_fft)
+        phase = torch.angle(x_fft)
+
+        # 2. Estimate Phase Congruency Map in Frequency Domain
+        # Phase alignment measure across channels
+        phase_mean = phase.mean(dim=1, keepdim=True)
+        phase_dev = torch.cos(phase - phase_mean)
+        
+        # Generate normalized frequency coordinates for learnable masks
+        # u: vertical frequency [-0.5, 0.5]
+        # v: horizontal frequency [0, 0.5]
+        W_fft = amplitude.shape[-1]
+        u = torch.fft.fftfreq(H, device=x.device).view(H, 1)
+        v = torch.fft.rfftfreq(W, device=x.device).view(1, W_fft)
+        r = torch.sqrt(u**2 + v**2) # (H, W_fft)
+        
+        # M_k of shape (num_masks, 1, H, W_fft)
+        M_k = torch.exp(-((r.unsqueeze(0) - self.f_c) ** 2) / (2 * (self.sigma ** 2) + 1e-6))
+        
+        # Weight masks
+        weights = torch.softmax(self.mask_weights, dim=0) # (num_masks, 1, 1, 1)
+        M_k_w = (M_k * weights).unsqueeze(2) # (num_masks, 1, 1, H, W_fft)
+        
+        # Expand amplitude and phase_dev to shape (1, B, C, H, W_fft)
+        amp_exp = amplitude.unsqueeze(0)
+        pdev_exp = phase_dev.unsqueeze(0)
+        
+        # Weighted gating sum across masks and channels
+        pc_num = (M_k_w * amp_exp * pdev_exp).sum(dim=0).sum(dim=1, keepdim=True)
+        pc_den = (M_k_w * amp_exp).sum(dim=0).sum(dim=1, keepdim=True)
+        
+        pc_map = pc_num / (pc_den + 1e-6)
+        pc_gate = torch.sigmoid(pc_map)
+
+        # 3. Filter Frequency Representation
+        x_fft_filtered = (amplitude * pc_gate) * torch.exp(1j * phase)
+
+        # 4. Inverse 2D FFT back to Spatial Domain
+        delta_x = torch.fft.irfft2(x_fft_filtered, s=(H, W), norm='backward')
+        delta_x = self.conv_refine(delta_x)
+
+        # 5. Residual connection with zero-init
+        return x + self.gamma * delta_x
+
+
+@MODELS.register_module()
+class SubPixelImplicitRefiner(BaseModule):
+    """Implicit Sub-Pixel Coordinate Field (SubPixel-INR)"""
+
+    def __init__(self,
+                 channels: int = 256,
+                 embed_dim: int = 16,
+                 init_cfg: OptConfigType = None) -> None:
+        super().__init__(init_cfg=init_cfg)
+        self.channels = channels
+        self.num_bands = 4 # Since enc_dim is 16, 2 coords * 2 (sin/cos) * num_bands = 16
+        
+        # 1. Define sub-pixel offsets for 2x2 local implicit grid
+        offsets = torch.tensor([
+            [-0.25, -0.25], [-0.25, 0.25],
+            [ 0.25, -0.25], [ 0.25, 0.25]
+        ], dtype=torch.float32) # (4, 2)
+        self.register_buffer('offsets', offsets)
+        
+        # 3. Lightweight Implicit Neural Network (INR)
+        self.inr_mlp = nn.Sequential(
+            nn.Conv2d(channels + embed_dim, channels, kernel_size=1),
+            nn.SiLU(),
+            nn.Conv2d(channels, channels, kernel_size=1)
+        )
+        
+        self.attn_heads = nn.Conv2d(channels, 4, kernel_size=1) # Attention weights for 4 sub-pixels
+        self.zero_conv = nn.Conv2d(channels, channels, kernel_size=1)
+        nn.init.zeros_(self.zero_conv.weight)
+        nn.init.zeros_(self.zero_conv.bias)
+
+    def _fourier_encode(self, pos: Tensor) -> Tensor:
+        # pos: (4, 2)
+        scales = (2.0 ** torch.arange(self.num_bands, device=pos.device)).view(1, 1, -1) # (1, 1, num_bands)
+        scaled_pos = pos.unsqueeze(-1) * scales * torch.pi # (4, 2, num_bands)
+        encoded = torch.cat([torch.sin(scaled_pos), torch.cos(scaled_pos)], dim=-1) # (4, 2, 2 * num_bands)
+        return encoded.view(4, -1) # (4, 16)
+
+    def forward(self, x: Tensor) -> Tensor:
+        B, C, H, W = x.shape
+        
+        # Encode coordinates once
+        pos_enc = self._fourier_encode(self.offsets) # (4, 16)
+        
+        # Query implicit features at 4 sub-pixel locations using vectorized operations
+        enc = pos_enc.view(1, 4, -1, 1, 1).expand(B, -1, -1, H, W)
+        x_expanded = x.unsqueeze(1).expand(-1, 4, -1, -1, -1)
+        x_k = torch.cat([x_expanded, enc], dim=2)
+        x_k = x_k.reshape(B * 4, -1, H, W)
+        
+        # Pass through INR MLP
+        f_k = self.inr_mlp(x_k) # (B * 4, C, H, W)
+        stacked_f = f_k.view(B, 4, C, H, W)
+        
+        # Compute dynamic aggregation weights across sub-pixels
+        attn_logits = self.attn_heads(x) # (B, 4, H, W)
+        attn_weights = torch.softmax(attn_logits, dim=1).unsqueeze(2) # (B, 4, 1, H, W)
+        
+        # Aggregate continuous sub-pixel details back to grid cell
+        delta_x = (stacked_f * attn_weights).sum(dim=1) # (B, C, H, W)
+        
+        return x + self.zero_conv(delta_x)
+
+
 class UpBlock(nn.Module):
     """Small reconstruction upsample block used by DGFE."""
 
@@ -242,12 +380,16 @@ class FeatureAugmentNeck(BaseModule):
                  morphology: OptConfigType = None,
                  dgfe: OptConfigType = None,
                  api: OptConfigType = None,
-        init_cfg: OptConfigType = None) -> None:
+                 phase_fpn: OptConfigType = None,
+                 subpixel_inr: OptConfigType = None,
+                 init_cfg: OptConfigType = None) -> None:
         super().__init__(init_cfg=init_cfg)
         self.base_neck = self._build_base_neck(base_neck)
         self.levels = tuple(int(level) for level in levels)
         channels = self._resolve_channels(out_channels)
         self.morphology_modules = nn.ModuleDict()
+        self.phase_fpn_modules = nn.ModuleDict()
+        self.subpixel_inr_modules = nn.ModuleDict()
         self.dgfe_modules = nn.ModuleDict()
         self.api_modules_by_level = nn.ModuleDict()
 
@@ -259,6 +401,16 @@ class FeatureAugmentNeck(BaseModule):
                 cfg.setdefault('type', 'MorphologicalEnhancement')
                 cfg.setdefault('channels', level_channels)
                 self.morphology_modules[str(level)] = MODELS.build(cfg)
+            if phase_fpn is not None:
+                cfg = dict(phase_fpn)
+                cfg.setdefault('type', 'PhaseCongruencyFPN')
+                cfg.setdefault('channels', level_channels)
+                self.phase_fpn_modules[str(level)] = MODELS.build(cfg)
+            if subpixel_inr is not None:
+                cfg = dict(subpixel_inr)
+                cfg.setdefault('type', 'SubPixelImplicitRefiner')
+                cfg.setdefault('channels', level_channels)
+                self.subpixel_inr_modules[str(level)] = MODELS.build(cfg)
             if dgfe is not None:
                 cfg = dict(dgfe)
                 cfg.setdefault('type', 'FeatureDGFE')
@@ -316,6 +468,10 @@ class FeatureAugmentNeck(BaseModule):
             key = str(level)
             if key in self.morphology_modules:
                 outs[level] = self.morphology_modules[key](outs[level])
+            if key in self.phase_fpn_modules:
+                outs[level] = self.phase_fpn_modules[key](outs[level])
+            if key in self.subpixel_inr_modules:
+                outs[level] = self.subpixel_inr_modules[key](outs[level])
             if key in self.dgfe_modules:
                 if batch_inputs is None:
                     raise RuntimeError('DGFE requires batch_inputs.')

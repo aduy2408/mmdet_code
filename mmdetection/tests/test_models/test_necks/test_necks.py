@@ -6,7 +6,8 @@ from torch.nn.modules.batchnorm import _BatchNorm
 from mmdet.models.necks import (FPG, FPN, FPN_CARAFE, NASFCOS_FPN, NASFPN, SSH,
                                 YOLOXPAFPN, ChannelMapper, DilatedEncoder,
                                 DyHead, FeatureAugmentNeck,
-                                MorphologicalEnhancement, SSDNeck, YOLOV3Neck)
+                                MorphologicalEnhancement, SSDNeck, YOLOV3Neck,
+                                PhaseCongruencyFPN, SubPixelImplicitRefiner)
 
 
 def test_fpn():
@@ -759,3 +760,67 @@ def test_feature_augment_neck_morphology_only_changes_p3():
     assert not torch.equal(actual[0], expected[0])
     for level in range(1, 4):
         assert torch.equal(actual[level], expected[level])
+
+
+def test_phase_congruency_fpn():
+    module = PhaseCongruencyFPN(channels=8, num_masks=2)
+    assert (module.gamma == 0.0).all()
+    x = torch.rand(2, 8, 16, 16, requires_grad=True)
+    out = module(x)
+    assert torch.equal(out, x)
+    assert out.shape == x.shape
+    
+    # Enable gradients and test backward
+    module.gamma.data.fill_(1.0)
+    out = module(x)
+    assert out.shape == x.shape
+    out.sum().backward()
+    assert x.grad is not None
+    assert module.mask_weights.grad is not None
+    assert module.f_c.grad is not None
+    assert module.sigma.grad is not None
+
+
+def test_subpixel_implicit_refiner():
+    module = SubPixelImplicitRefiner(channels=8, embed_dim=16)
+    x = torch.rand(2, 8, 16, 16, requires_grad=True)
+    out = module(x)
+    # MLP zero_conv weights are 0, so out must be identical to x initially
+    assert torch.equal(out, x)
+    assert out.shape == x.shape
+    
+    # Add gradients check
+    # Modify zero_conv weights to be non-zero to test feature learning path
+    module.zero_conv.weight.data.fill_(0.1)
+    out = module(x)
+    assert out.shape == x.shape
+    out.sum().backward()
+    assert x.grad is not None
+    assert module.attn_heads.weight.grad is not None
+    assert module.inr_mlp[0].weight.grad is not None
+
+
+def test_feature_augment_neck_phase_and_subpixel():
+    feats = tuple(
+        torch.rand(1, channels, size, size)
+        for channels, size in zip((8, 16, 32, 64), (32, 16, 8, 4)))
+    base = FPN(
+        in_channels=[8, 16, 32, 64], out_channels=8, num_outs=4)
+    expected = base(feats)
+    neck = FeatureAugmentNeck(
+        base_neck=dict(
+            type='FPN',
+            in_channels=[8, 16, 32, 64],
+            out_channels=8,
+            num_outs=4),
+        out_channels=8,
+        levels=(0, ),
+        phase_fpn=dict(num_masks=2),
+        subpixel_inr=dict(embed_dim=16))
+    neck.base_neck.load_state_dict(base.state_dict())
+    
+    # Verify outputs are initially equal to base outputs because of zero-initializations
+    actual = neck(feats)
+    for level in range(4):
+        assert torch.equal(actual[level], expected[level])
+
