@@ -75,23 +75,32 @@ def upload_folder(
     )
 
 
-def test_1024(
-        root: Path, api: HfApi, repo_id: str) -> list[dict[str, Any]]:
+def test_existing(
+        root: Path, sha: str, resolution: int,
+        api: HfApi, repo_id: str) -> list[dict[str, Any]]:
     rows = []
     for variant in repair.DEFAULT_VARIANTS:
-        run_dir = root / variant
+        run_dir = root / sha / str(resolution) / variant
         config = run_dir / 'patched_config.py'
         for checkpoint in repair.checkpoints(config):
-            test_dir, duration = repair.test_config(config, checkpoint)
-            metrics = repair.latest_validation_metrics(test_dir)
+            test_dir = (
+                run_dir / 'checkpoint_tests' / checkpoint.stem)
+            summary = test_dir / 'run_summary.json'
+            if summary.is_file():
+                payload = json.loads(summary.read_text())
+                duration = payload['duration_seconds']
+                metrics = payload['metrics']
+            else:
+                test_dir, duration = repair.test_config(config, checkpoint)
+                metrics = repair.latest_validation_metrics(test_dir)
             upload_folder(
                 api,
                 test_dir,
-                f'{SOURCE_SHA}/1024/{variant}/{checkpoint.stem}',
+                f'{sha}/{resolution}/{variant}/{checkpoint.stem}',
                 repo_id,
             )
             rows.append({
-                'resolution': 1024,
+                'resolution': resolution,
                 'variant': variant,
                 'checkpoint': checkpoint.name,
                 'duration_seconds': duration,
@@ -294,6 +303,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--hf-repo-id', default=HF_REPO_ID)
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument(
+        '--resume-1376-sha',
+        help='Reuse completed 1376 training artifacts from this commit')
     return parser.parse_args()
 
 
@@ -311,13 +323,21 @@ def main() -> None:
     state = args.work_root / sha / 'continuation_state.json'
 
     write_state(state, status='restoring_1024', git_sha=sha)
-    restored = restore_1024(args.work_root, token)
-    write_state(state, status='running_1376', git_sha=sha)
-    run_1376(args)
+    restore_1024(args.work_root, token)
+    training_sha = args.resume_1376_sha or sha
+    if args.resume_1376_sha:
+        write_state(
+            state, status='resuming_1376_tests', git_sha=sha,
+            training_sha=training_sha)
+    else:
+        write_state(state, status='running_1376', git_sha=sha)
+        run_1376(args)
 
     write_state(state, status='testing_1024', git_sha=sha)
-    rows = test_1024(restored, api, args.hf_repo_id)
-    rows.extend(test_rows(args.work_root, sha, 1376))
+    rows = test_existing(
+        args.work_root, SOURCE_SHA, 1024, api, args.hf_repo_id)
+    rows.extend(test_existing(
+        args.work_root, training_sha, 1376, api, args.hf_repo_id))
     if len(rows) != 16:
         raise RuntimeError(f'Expected 16 test rows, got {len(rows)}')
     rows.sort(
