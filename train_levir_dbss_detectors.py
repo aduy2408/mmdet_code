@@ -40,6 +40,7 @@ DEFAULT_VARIANTS = ('baseline', 'dbss_gamma06')
 EFFECTIVE_BATCH = 8
 REFERENCE_BATCH = 16
 WARMUP_OPTIMIZER_UPDATES = 500
+DBSS_GRAD_MAX_NORM = 10.0
 MILESTONES = (13, 18)
 
 
@@ -116,6 +117,8 @@ def patch_dbss(cfg: Any, model_name: str, target_stride: int) -> None:
     custom_keys['neck.direction.2'] = dict(lr_mult=10.0, decay_mult=0.0)
     paramwise['custom_keys'] = custom_keys
     cfg.optim_wrapper.paramwise_cfg = paramwise
+    cfg.optim_wrapper.clip_grad = dict(
+        max_norm=DBSS_GRAD_MAX_NORM, norm_type=2)
 
 
 def dataset_counts(dataset_out: Path) -> dict[str, dict[str, int]]:
@@ -187,6 +190,8 @@ def write_config(
         warmup_optimizer_updates=WARMUP_OPTIMIZER_UPDATES,
         warmup_dataloader_iterations=(
             WARMUP_OPTIMIZER_UPDATES * accumulation),
+        grad_clip_max_norm=(
+            DBSS_GRAD_MAX_NORM if variant == 'dbss_gamma06' else None),
     )
     output = Path(cfg.work_dir) / 'patched_config.py'
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -321,6 +326,10 @@ def parse_args() -> argparse.Namespace:
         default='mmdetection/work_dirs/levir_dbss_detector_sweep')
     parser.add_argument('--models', default=','.join(DEFAULT_MODELS))
     parser.add_argument('--variants', default=','.join(DEFAULT_VARIANTS))
+    parser.add_argument(
+        '--jobs',
+        default='',
+        help='Optional model/variant pairs; overrides --models/--variants.')
     parser.add_argument('--image-size', type=int, default=768)
     parser.add_argument('--epochs', type=int, default=20)
     parser.add_argument('--num-workers', type=int, default=4)
@@ -343,6 +352,23 @@ def main() -> None:
     if unknown_models or unknown_variants:
         raise ValueError(
             f'Unknown models={unknown_models}, variants={unknown_variants}')
+    if args.jobs:
+        jobs = []
+        for item in comma_list(args.jobs):
+            try:
+                model, variant = item.split('/', 1)
+            except ValueError as error:
+                raise ValueError(f'Invalid job {item!r}; use model/variant') from error
+            if model not in MODEL_CONFIGS or variant not in DEFAULT_VARIANTS:
+                raise ValueError(f'Unknown job: {item}')
+            jobs.append((model, variant))
+        models = list(dict.fromkeys(model for model, _ in jobs))
+    else:
+        jobs = [
+            (model, variant)
+            for model in models
+            for variant in variants
+        ]
     if EFFECTIVE_BATCH % max(MICRO_BATCH[model] for model in models):
         raise ValueError('Micro batches must divide effective batch')
 
@@ -360,8 +386,7 @@ def main() -> None:
     configs = {
         (model, variant): write_config(
             model, variant, args, dataset_out, image_dir, sha)
-        for model in models
-        for variant in variants
+        for model, variant in jobs
     }
     for key, config in configs.items():
         print(f'CONFIG {key[0]}/{key[1]}: {config}')

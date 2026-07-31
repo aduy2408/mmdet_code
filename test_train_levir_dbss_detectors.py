@@ -40,6 +40,9 @@ def test_write_paired_detector_matrix(tmp_path: Path):
         assert dbss.model.neck.target_level == 'lowest'
         assert dbss.model.neck.gamma_max == 0.6
         assert dbss.model.neck.legacy_artifact_mode is True
+        assert dbss.optim_wrapper.clip_grad.max_norm == (
+            sweep.DBSS_GRAD_MAX_NORM)
+        assert 'clip_grad' not in baseline.optim_wrapper
         assert dbss.model.target_stride == expected_stride
         assert dbss.dbss_detector_sweep.target_pyramid_level == (
             'P2' if expected_stride == 4 else 'P3')
