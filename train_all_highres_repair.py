@@ -220,6 +220,8 @@ def latest_validation_metrics(work_dir: Path) -> dict[str, float]:
                 record = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(record, dict):
+                continue
             value = record.get('coco/bbox_mAP')
             if not isinstance(value, (int, float)):
                 continue

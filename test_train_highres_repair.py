@@ -6,6 +6,25 @@ from mmengine.config import Config
 import train_all_highres_repair as sweep
 
 
+def test_latest_validation_metrics_ignores_non_object_json(tmp_path: Path):
+    scalar_file = tmp_path / 'scalars.json'
+    scalar_file.write_text(
+        '\n'.join([
+            '1',
+            'null',
+            '[]',
+            '{"coco/bbox_mAP": 0.28, "coco/bbox_mAP_75": 0.11}',
+            '{"coco/bbox_mAP": 0.30, "coco/bbox_mAP_75": 0.12}',
+        ]),
+        encoding='utf-8',
+    )
+
+    assert sweep.latest_validation_metrics(tmp_path) == {
+        'coco/bbox_mAP': 0.30,
+        'coco/bbox_mAP_75': 0.12,
+    }
+
+
 def test_write_config_matrix(tmp_path: Path):
     dataset_out = tmp_path / 'dataset'
     annotation_dir = dataset_out / 'annotations'
