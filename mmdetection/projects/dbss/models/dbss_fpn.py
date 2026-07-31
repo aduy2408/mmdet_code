@@ -34,6 +34,7 @@ class DBSSFPN(FPN):
             use_haar_reliability: bool = False,
             hidden_channels: int = 64,
             legacy_artifact_mode: bool = False,
+            target_level: str = 'lowest',
             **kwargs) -> None:
         super().__init__(*args, **kwargs)
         candidate_count = math.prod(candidate_grid)
@@ -61,6 +62,8 @@ class DBSSFPN(FPN):
         if legacy_artifact_mode and residual_mode != 'ridge':
             raise ValueError(
                 'legacy_artifact_mode only supports ridge residuals')
+        if target_level != 'lowest':
+            raise ValueError("target_level must be 'lowest'")
         if projection_mode not in {'ridge', 'softmax'}:
             raise ValueError(
                 "projection_mode must be either 'ridge' or 'softmax'")
@@ -84,6 +87,7 @@ class DBSSFPN(FPN):
         self.gamma_max = float(gamma_max)
         self.use_haar_reliability = bool(use_haar_reliability)
         self.legacy_artifact_mode = bool(legacy_artifact_mode)
+        self.target_level = target_level
         self._ridge_retry_count = 0
         self._ridge_lstsq_count = 0
 
@@ -420,6 +424,9 @@ class DBSSFPN(FPN):
             / (1 + direction_norm))
         enhanced = p3 + displacement
         aux.update(
+            pre_target=p3,
+            post_target=enhanced,
+            # Backward-compatible aliases for published FCOS artifacts.
             pre_p3=p3,
             post_p3=enhanced,
             residual=residual,

@@ -6,7 +6,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from mmdet.models.detectors import FCOS
+from mmdet.models.detectors import (ATSS, FCOS, CascadeRCNN, FasterRCNN,
+                                    RetinaNet)
 from mmdet.registry import MODELS
 from mmdet.structures import OptSampleList, SampleList
 
@@ -16,33 +17,38 @@ def _box_tensor(boxes) -> Tensor:
 
 
 @MODELS.register_module()
-class DBSSFCOS(FCOS):
-    """FCOS with DBSS-enhanced P3 and a separation objective."""
+class DBSSDetectorMixin:
+    """Detector-agnostic DBSS loss on the lowest available FPN level."""
 
     def __init__(
             self,
             *args,
-            position_stride: int = 8,
+            target_stride: int = 8,
+            position_stride: int | None = None,
             improvement_margin: float = 0.03,
             loss_sep_weight: float = 0.5,
             **kwargs) -> None:
         super().__init__(*args, **kwargs)
         if not hasattr(self.neck, 'forward_with_aux'):
             raise TypeError('DBSSFCOS requires a neck with forward_with_aux()')
-        if position_stride < 1:
-            raise ValueError('position_stride must be positive')
+        if position_stride is not None:
+            target_stride = position_stride
+        if target_stride < 1:
+            raise ValueError('target_stride must be positive')
         if improvement_margin < 0 or loss_sep_weight < 0:
             raise ValueError(
                 'improvement_margin and loss_sep_weight must be non-negative')
-        self.position_stride = int(position_stride)
+        self.target_stride = int(target_stride)
+        # Compatibility for the original FCOS configs and checkpoints.
+        self.position_stride = self.target_stride
         self.improvement_margin = float(improvement_margin)
         self.loss_sep_weight = float(loss_sep_weight)
 
     def _valid_shapes(self, batch_data_samples: SampleList
                       ) -> list[tuple[int, int]]:
         return [
-            (math.ceil(sample.metainfo['img_shape'][0] / self.position_stride),
-             math.ceil(sample.metainfo['img_shape'][1] / self.position_stride))
+            (math.ceil(sample.metainfo['img_shape'][0] / self.target_stride),
+             math.ceil(sample.metainfo['img_shape'][1] / self.target_stride))
             for sample in batch_data_samples
         ]
 
@@ -72,8 +78,9 @@ class DBSSFCOS(FCOS):
     def separation_objective(
             self, aux: dict,
             batch_data_samples: SampleList) -> dict[str, Tensor]:
-        pre_p3 = aux['pre_p3']
-        post_p3 = aux['post_p3']
+        pre_p3 = aux['pre_target'] if 'pre_target' in aux else aux['pre_p3']
+        post_p3 = (
+            aux['post_target'] if 'post_target' in aux else aux['post_p3'])
         background_candidates = aux['selected_candidates_p3']
         hinge_values = []
         gap_pre_values = []
@@ -124,13 +131,9 @@ class DBSSFCOS(FCOS):
             dbss_gap_gain=(gap_post - gap_pre).mean().detach(),
             dbss_active_ratio=(hinge > 0).to(hinge.dtype).mean().detach())
 
-    def loss(self, batch_inputs: Tensor,
-             batch_data_samples: SampleList) -> dict[str, Tensor]:
-        features, aux = self._extract_feat_with_dbss_aux(
-            batch_inputs, batch_data_samples)
-        losses = self.bbox_head.loss(features, batch_data_samples)
-        losses.update(self.separation_objective(aux, batch_data_samples))
-        losses.update(
+    @staticmethod
+    def _diagnostic_losses(aux: dict) -> dict[str, Tensor]:
+        return dict(
             dbss_displacement_ratio=aux['displacement_ratio'].detach(),
             dbss_basis_count=aux['basis_count'].float().mean().detach(),
             dbss_basis_max_cosine=aux['basis_max_cosine'].mean().detach(),
@@ -144,18 +147,27 @@ class DBSSFCOS(FCOS):
                 'ridge_lstsq_fallback'].detach(),
             dbss_direction_weight_ratio=aux[
                 'direction_weight_ratio'].detach())
+
+    def _add_dbss_losses(self, losses: dict[str, Tensor], aux: dict,
+                         batch_data_samples: SampleList) -> dict[str, Tensor]:
+        losses.update(self.separation_objective(aux, batch_data_samples))
+        losses.update(self._diagnostic_losses(aux))
         return losses
 
-    def predict(
-            self,
-            batch_inputs: Tensor,
-            batch_data_samples: SampleList,
-            rescale: bool = True) -> SampleList:
-        features, _ = self._extract_feat_with_dbss_aux(
+    def loss(self, batch_inputs: Tensor,
+             batch_data_samples: SampleList) -> dict[str, Tensor]:
+        features, aux = self._extract_feat_with_dbss_aux(
             batch_inputs, batch_data_samples)
-        results = self.bbox_head.predict(
-            features, batch_data_samples, rescale=rescale)
-        return self.add_pred_to_datasample(batch_data_samples, results)
+        if hasattr(self, 'bbox_head'):
+            losses = self.bbox_head.loss(features, batch_data_samples)
+        else:
+            losses = self.loss_from_features(features, batch_data_samples)
+        return self._add_dbss_losses(losses, aux, batch_data_samples)
+
+
+@MODELS.register_module()
+class DBSSFCOS(DBSSDetectorMixin, FCOS):
+    """FCOS with DBSS on its lowest FPN level."""
 
     def _forward(
             self,
@@ -166,3 +178,23 @@ class DBSSFCOS(FCOS):
         features, _ = self._extract_feat_with_dbss_aux(
             batch_inputs, batch_data_samples)
         return self.bbox_head.forward(features)
+
+
+@MODELS.register_module()
+class DBSSATSS(DBSSDetectorMixin, ATSS):
+    """ATSS with DBSS on its lowest FPN level."""
+
+
+@MODELS.register_module()
+class DBSSRetinaNet(DBSSDetectorMixin, RetinaNet):
+    """RetinaNet with DBSS on its lowest FPN level."""
+
+
+@MODELS.register_module()
+class DBSSFasterRCNN(DBSSDetectorMixin, FasterRCNN):
+    """Faster R-CNN with DBSS on its lowest FPN level."""
+
+
+@MODELS.register_module()
+class DBSSCascadeRCNN(DBSSDetectorMixin, CascadeRCNN):
+    """Cascade R-CNN with DBSS on its lowest FPN level."""

@@ -98,6 +98,36 @@ def test_identity_level_isolation_and_bounded_displacement():
     displacement_norm = aux['displacement'].norm(dim=1, keepdim=True)
     bound = module.gamma_max * aux['feature_scale']
     assert torch.all(displacement_norm <= bound + 1e-6)
+    assert aux['pre_target'] is aux['pre_p3']
+    assert aux['post_target'] is aux['post_p3']
+
+
+def test_only_lowest_available_fpn_output_is_enhanced():
+    p2_module = DBSSFPN(
+        in_channels=[2, 4, 8, 16],
+        out_channels=4,
+        num_outs=5,
+        start_level=0,
+        add_extra_convs='on_output',
+        embed_channels=3,
+        candidate_grid=(2, 2),
+        shortlist_size=4,
+        num_bases=2,
+        hidden_channels=4,
+        target_level='lowest')
+    p2_module.init_weights()
+    with torch.no_grad():
+        p2_module.direction[-1].weight.fill_(0.1)
+    inputs = backbone_inputs(batch_size=1)
+    baseline = super(DBSSFPN, p2_module).forward(inputs)
+    changed, _ = p2_module.forward_with_aux(inputs)
+    assert changed[0].shape[-2:] == (32, 32)
+    assert not torch.equal(changed[0], baseline[0])
+    assert all(torch.equal(left, right)
+               for left, right in zip(changed[1:], baseline[1:]))
+
+    with pytest.raises(ValueError, match='target_level'):
+        neck(target_level='p3')
 
 
 def test_legacy_artifact_mode_uses_original_ridge_path():
