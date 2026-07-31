@@ -100,6 +100,25 @@ def test_identity_level_isolation_and_bounded_displacement():
     assert torch.all(displacement_norm <= bound + 1e-6)
 
 
+def test_legacy_artifact_mode_uses_original_ridge_path():
+    module = neck(legacy_artifact_mode=True)
+    assert not hasattr(module, 'learned_control')
+    tokens = torch.randn(9, 3, requires_grad=True)
+    bases = torch.randn(2, 3, requires_grad=True)
+    projected = module._project(tokens, bases)
+    gram = bases.float() @ bases.float().transpose(0, 1)
+    gram = gram + module.ridge_lambda * torch.eye(2)
+    expected = (
+        torch.linalg.solve(
+            gram, bases.float() @ tokens.float().transpose(0, 1)
+        ).transpose(0, 1) @ bases.float()
+    )
+    assert torch.allclose(projected, expected)
+    projected.square().mean().backward()
+    assert torch.isfinite(tokens.grad).all()
+    assert torch.isfinite(bases.grad).all()
+
+
 def test_valid_crop_excludes_padding_from_candidates():
     module = neck()
     p3 = torch.randn(2, 4, 8, 8)

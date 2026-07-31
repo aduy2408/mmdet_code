@@ -33,6 +33,7 @@ class DBSSFPN(FPN):
             gamma_max: float = 0.1,
             use_haar_reliability: bool = False,
             hidden_channels: int = 64,
+            legacy_artifact_mode: bool = False,
             **kwargs) -> None:
         super().__init__(*args, **kwargs)
         candidate_count = math.prod(candidate_grid)
@@ -57,6 +58,9 @@ class DBSSFPN(FPN):
         }
         if residual_mode not in residual_modes:
             raise ValueError(f'residual_mode must be one of {residual_modes}')
+        if legacy_artifact_mode and residual_mode != 'ridge':
+            raise ValueError(
+                'legacy_artifact_mode only supports ridge residuals')
         if projection_mode not in {'ridge', 'softmax'}:
             raise ValueError(
                 "projection_mode must be either 'ridge' or 'softmax'")
@@ -79,14 +83,17 @@ class DBSSFPN(FPN):
         self.temperature = float(temperature)
         self.gamma_max = float(gamma_max)
         self.use_haar_reliability = bool(use_haar_reliability)
+        self.legacy_artifact_mode = bool(legacy_artifact_mode)
         self._ridge_retry_count = 0
         self._ridge_lstsq_count = 0
 
         channels = self.out_channels
         self.embedding = nn.Conv2d(channels, embed_channels, 1)
         self.embedding_norm = nn.LayerNorm(embed_channels)
-        self.learned_control = nn.Conv2d(embed_channels, embed_channels, 1)
-        self.learned_control_norm = nn.LayerNorm(embed_channels)
+        if not self.legacy_artifact_mode:
+            self.learned_control = nn.Conv2d(
+                embed_channels, embed_channels, 1)
+            self.learned_control_norm = nn.LayerNorm(embed_channels)
         direction_in = channels + embed_channels
         self.direction = nn.Sequential(
             nn.Conv2d(direction_in, hidden_channels, 1),
@@ -189,6 +196,21 @@ class DBSSFPN(FPN):
                 if not torch.isfinite(bases32).all():
                     raise FloatingPointError(
                         'DBSS ridge bases contain non-finite values')
+                if self.legacy_artifact_mode:
+                    gram = bases32 @ bases32.transpose(0, 1)
+                    gram = gram + self.ridge_lambda * torch.eye(
+                        bases.shape[0],
+                        device=bases.device,
+                        dtype=torch.float32)
+                    rhs = bases32 @ tokens32.transpose(0, 1)
+                    coefficients = torch.linalg.solve(gram, rhs)
+                    projected = (
+                        coefficients.transpose(0, 1) @ bases32
+                    ).to(original_dtype)
+                    if not torch.isfinite(projected).all():
+                        raise FloatingPointError(
+                            'DBSS ridge projection contains non-finite values')
+                    return projected
                 base_gram = bases32 @ bases32.transpose(0, 1)
                 rhs = bases32 @ tokens32.transpose(0, 1)
                 if not torch.isfinite(base_gram).all():
