@@ -35,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tinyperson-root", default="../TinyPerson/tiny_set")
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--split-seed", type=int, default=42)
+    parser.add_argument("--seeds", type=int, nargs="+", default=[42])
     parser.add_argument("--levir-batch-size", type=int, default=4)
     parser.add_argument("--tinyperson-batch-size", type=int, default=2)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -70,56 +71,47 @@ def main() -> None:
         for value in (str(code_root / "mmdetection"), env.get("PYTHONPATH", ""))
         if value
     )
-    for dataset, model in jobs:
-        if dataset == "levir":
-            command = [
-                str(python),
-                str(code_root / "train_all_levir_baseline.py"),
-                "--models",
-                model,
-                "--data-root",
-                args.levir_root,
-                "--epochs",
-                str(1 if args.smoke_test else args.epochs),
-                "--split-seed",
-                str(args.split_seed),
-                "--batch-size",
-                str(args.levir_batch_size),
-                "--num-workers",
-                str(args.num_workers),
-                "--python",
-                str(python),
-                "--no-hf-upload",
-            ]
-            if args.smoke_test:
-                command += ["--limit", "16"]
-        else:
-            command = [
-                str(python),
-                str(code_root / "train_all_tinyperson_baseline.py"),
-                "--models",
-                model,
-                "--data-root",
-                args.tinyperson_root,
-                "--epochs",
-                str(1 if args.smoke_test else args.epochs),
-                "--batch-size",
-                str(args.tinyperson_batch_size),
-                "--num-workers",
-                str(args.num_workers),
-                "--python",
-                str(python),
-            ]
-            if args.smoke_test:
-                command += ["--limit", "32", "--skip-final-metrics"]
-        if args.amp:
-            command.append("--amp")
-        if args.resume:
-            command.append("--resume")
-        if args.dry_run:
-            command.append("--dry-run")
-        print("RUN", " ".join(command), flush=True)
-        subprocess.run(command, cwd=code_root, env=env, check=True)
+    for seed in args.seeds:
+        for dataset, model in jobs:
+            work_dir = code_root / "mmdetection" / "work_dirs" / (
+                f"{dataset}_baseline_split{args.split_seed}_seed{seed}"
+            )
+            if dataset == "levir":
+                command = [
+                    str(python),
+                    str(code_root / "train_all_levir_baseline.py"),
+                    "--models", model, "--data-root", args.levir_root,
+                    "--epochs", str(1 if args.smoke_test else args.epochs),
+                    "--split-seed", str(args.split_seed), "--seed", str(seed),
+                    "--work-dir", str(work_dir),
+                    "--batch-size", str(args.levir_batch_size),
+                    "--num-workers", str(args.num_workers),
+                    "--python", str(python), "--no-hf-upload",
+                ]
+                if args.smoke_test:
+                    command += ["--limit", "16"]
+            else:
+                command = [
+                    str(python),
+                    str(code_root / "train_all_tinyperson_baseline.py"),
+                    "--models", model, "--data-root", args.tinyperson_root,
+                    "--epochs", str(1 if args.smoke_test else args.epochs),
+                    "--split-seed", str(args.split_seed), "--seed", str(seed),
+                    "--work-dir", str(work_dir),
+                    "--batch-size", str(args.tinyperson_batch_size),
+                    "--num-workers", str(args.num_workers),
+                    "--python", str(python),
+                ]
+                if args.smoke_test:
+                    command += ["--limit", "32", "--skip-final-metrics"]
+            if args.amp:
+                command.append("--amp")
+            if args.resume:
+                command.append("--resume")
+            if args.dry_run:
+                command.append("--dry-run")
+            print("RUN", " ".join(command), flush=True)
+            subprocess.run(command, cwd=code_root, env=env, check=True)
 
 
 if __name__ == "__main__":
