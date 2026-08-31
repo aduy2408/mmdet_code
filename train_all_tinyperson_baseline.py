@@ -17,6 +17,9 @@ import train_all_levir_baseline as common
 
 
 MODEL_CONFIGS = {
+    "atss": "configs/atss/atss_r50_fpn_1x_coco.py",
+    "fcos": "configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py",
+    "faster_rcnn": "configs/faster_rcnn/faster-rcnn_r50_fpn_1x_coco.py",
     "retinanet": "configs/retinanet/retinanet_r50_fpn_1x_coco.py",
     "cascade_rcnn": "configs/cascade_rcnn/cascade-rcnn_r50_fpn_1x_coco.py",
     "rtmdet": "configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",

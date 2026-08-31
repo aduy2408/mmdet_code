@@ -14,8 +14,9 @@ import train_all_tinyperson_baseline as tinyperson  # noqa: E402
 
 def test_model_and_machine_manifests():
     expected = {'retinanet', 'cascade_rcnn', 'rtmdet'}
+    tinyperson_expected = expected | {'atss', 'fcos', 'faster_rcnn'}
     assert expected <= set(levir.MODEL_CONFIGS)
-    assert expected == set(tinyperson.MODEL_CONFIGS)
+    assert tinyperson_expected == set(tinyperson.MODEL_CONFIGS)
     assert set(two_server.JOBS) == {1, 2}
     assert {
         job for jobs in two_server.JOBS.values() for job in jobs
