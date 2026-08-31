@@ -491,6 +491,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-only", action="store_true")
     parser.add_argument("--skip-test", action="store_true")
     parser.add_argument("--skip-final-metrics", action="store_true")
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Record a failed model and continue with the remaining models.",
+    )
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument("--machine-index", type=int, default=0)
     return parser.parse_args()
@@ -515,10 +520,22 @@ def main() -> None:
     ]
     print(f"Assigned models ({args.machine_index}/{args.num_machines}): {assigned}")
     for model_name in assigned:
-        config_paths = write_configs(model_name, args)
-        print(f"CONFIG {model_name}: {config_paths['train']}")
-        if not args.dry_run:
-            run_job(model_name, config_paths, args)
+        try:
+            config_paths = write_configs(model_name, args)
+            print(f"CONFIG {model_name}: {config_paths['train']}")
+            if not args.dry_run:
+                run_job(model_name, config_paths, args)
+        except Exception as exc:
+            if not args.continue_on_error:
+                raise
+            work_dir = common.resolve_path(args.work_dir) / model_name
+            work_dir.mkdir(parents=True, exist_ok=True)
+            (work_dir / "failure.json").write_text(
+                json.dumps({"model": model_name, "seed": args.seed, "error": repr(exc)}, indent=2)
+                + "\n",
+                encoding="utf-8",
+            )
+            print(f"MODEL FAILED, CONTINUING: {model_name}: {exc}", flush=True)
 
 
 if __name__ == "__main__":
