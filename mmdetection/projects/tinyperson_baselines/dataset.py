@@ -50,5 +50,6 @@ class LoadTinyPersonImageFromFile(LoadImageFromFile):
         results["img"] = image
         results["img_shape"] = image.shape[:2]
         results["ori_shape"] = image.shape[:2]
-        results["scale_factor"] = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+        # MMDetection expects (x_scale, y_scale) and repeats it for xyxy boxes.
+        results["scale_factor"] = np.array([1.0, 1.0], dtype=np.float32)
         return results
