@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-VENV_DIR="${VENV_DIR:-/tmp/mmdet-venv}"
+VENV_DIR="${VENV_DIR:-/marimo/mmdet-venv}"
 export CUDA_HOME="${CUDA_HOME:-/usr/local/cuda-13.1}"
 if [ ! -x "$CUDA_HOME/bin/nvcc" ]; then
   FOUND_NVCC="$(find /usr/local -name nvcc 2>/dev/null | head -n 1)"

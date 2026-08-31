@@ -23,6 +23,8 @@ MODEL_CONFIGS = {
     "retinanet": "configs/retinanet/retinanet_r50_fpn_1x_coco.py",
     "faster_rcnn": "configs/faster_rcnn/faster-rcnn_r50_fpn_1x_coco.py",
     "fcos": "configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py",
+    "cascade_rcnn": "configs/cascade_rcnn/cascade-rcnn_r50_fpn_1x_coco.py",
+    "rtmdet": "configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",
 }
 SPLIT_RATIOS = {"train": 0.70, "val": 0.15, "test": 0.15}
 SCENE_RE = re.compile(r"^(.*)_(-?\d+)_(-?\d+)$")
@@ -46,6 +48,14 @@ def resolve_path(value: str | Path) -> Path:
 
 def comma_list(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def default_python() -> str:
+    configured = os.environ.get("MMDET_PYTHON")
+    if configured:
+        return configured
+    marimo_python = Path("/marimo/mmdet-venv/bin/python")
+    return str(marimo_python) if marimo_python.is_file() else sys.executable
 
 
 def scene_name(image_path: Path) -> str:
@@ -215,23 +225,41 @@ def set_num_classes(obj: Any) -> None:
             set_num_classes(value)
 
 
-def set_resize_scale(obj: Any) -> None:
+def set_resize_scale(obj: Any, image_size: int) -> None:
     if isinstance(obj, dict):
         if obj.get("type") == "Resize":
-            obj["scale"] = (512, 512)
+            obj["scale"] = (image_size, image_size)
         for value in obj.values():
-            set_resize_scale(value)
+            set_resize_scale(value, image_size)
     elif isinstance(obj, list):
         for value in obj:
-            set_resize_scale(value)
+            set_resize_scale(value, image_size)
 
 
-def patch_dataset(dataset: Any, dataset_out: Path, image_dir: Path, split: str) -> None:
+def patch_dataset(
+    dataset: Any,
+    dataset_out: Path,
+    image_dir: Path,
+    split: str,
+    image_size: int,
+) -> None:
     dataset.data_root = ""
     dataset.ann_file = str(dataset_out / "annotations" / f"{split}.json")
     dataset.data_prefix = dict(img=f"{image_dir}/")
     dataset.metainfo = dict(classes=("ship",))
-    set_resize_scale(dataset.pipeline)
+    set_resize_scale(dataset.pipeline, image_size)
+
+
+def simple_pipeline(image_size: int, train: bool) -> list[dict[str, Any]]:
+    pipeline = [
+        dict(type="LoadImageFromFile", backend_args=None),
+        dict(type="LoadAnnotations", with_bbox=True),
+        dict(type="Resize", scale=(image_size, image_size), keep_ratio=True),
+    ]
+    if train:
+        pipeline.append(dict(type="RandomFlip", prob=0.5))
+    pipeline.append(dict(type="PackDetInputs"))
+    return pipeline
 
 
 def patch_config(
@@ -244,9 +272,27 @@ def patch_config(
     set_num_classes(cfg.model)
     cfg.val_dataloader = deepcopy(cfg.val_dataloader)
     cfg.test_dataloader = deepcopy(cfg.test_dataloader)
-    patch_dataset(cfg.train_dataloader.dataset, dataset_out, image_dir, "train")
-    patch_dataset(cfg.val_dataloader.dataset, dataset_out, image_dir, "val")
-    patch_dataset(cfg.test_dataloader.dataset, dataset_out, image_dir, "test")
+    if model_name == "rtmdet":
+        # The stock RTMDet-S recipe is 300 epochs and its pipeline switch is
+        # incompatible with a short baseline schedule. Keep the architecture,
+        # but use the same plain augmentation protocol as the other detectors.
+        cfg.train_dataloader.dataset.pipeline = simple_pipeline(args.image_size, True)
+        cfg.val_dataloader.dataset.pipeline = simple_pipeline(args.image_size, False)
+        cfg.test_dataloader.dataset.pipeline = simple_pipeline(args.image_size, False)
+        cfg.custom_hooks = [
+            hook for hook in cfg.get("custom_hooks", [])
+            if hook.get("type") != "PipelineSwitchHook"
+        ]
+
+    patch_dataset(
+        cfg.train_dataloader.dataset, dataset_out, image_dir, "train", args.image_size
+    )
+    patch_dataset(
+        cfg.val_dataloader.dataset, dataset_out, image_dir, "val", args.image_size
+    )
+    patch_dataset(
+        cfg.test_dataloader.dataset, dataset_out, image_dir, "test", args.image_size
+    )
 
     for dataloader in (
         cfg.train_dataloader,
@@ -260,7 +306,37 @@ def patch_config(
     cfg.test_evaluator.ann_file = str(dataset_out / "annotations" / "test.json")
     cfg.train_cfg.max_epochs = args.epochs
     cfg.train_cfg.val_interval = 1
+    if model_name == "rtmdet":
+        milestones = sorted({
+            epoch
+            for epoch in (
+                max(1, round(args.epochs * 2 / 3)),
+                max(1, round(args.epochs * 11 / 12)),
+            )
+            if epoch < args.epochs
+        })
+        cfg.train_cfg.pop("dynamic_intervals", None)
+        cfg.param_scheduler = [
+            dict(
+                type="LinearLR",
+                start_factor=0.001,
+                by_epoch=False,
+                begin=0,
+                end=500,
+            ),
+            dict(
+                type="MultiStepLR",
+                by_epoch=True,
+                begin=0,
+                end=args.epochs,
+                milestones=milestones,
+                gamma=0.1,
+            ),
+        ]
     cfg.work_dir = str(resolve_path(args.work_dir) / model_name)
+    cfg.test_evaluator.outfile_prefix = str(
+        Path(cfg.work_dir) / "test_results" / "test" / "levir_ship"
+    )
     cfg.default_hooks.checkpoint.update(
         interval=1,
         save_best="coco/bbox_mAP",
@@ -282,14 +358,20 @@ def write_config(
     if root not in sys.path:
         sys.path.insert(0, root)
     from mmengine.config import Config
-    from mmdet.utils import register_all_modules
 
-    register_all_modules()
     cfg = Config.fromfile(str(mmdet_root() / MODEL_CONFIGS[model_name]))
     cfg = patch_config(cfg, model_name, args, dataset_out, image_dir)
     output = Path(cfg.work_dir) / "patched_config.py"
+    val_output = Path(cfg.work_dir) / "patched_config_val.py"
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg.dump(str(output))
+    val_cfg = deepcopy(cfg)
+    val_cfg.test_dataloader = deepcopy(cfg.val_dataloader)
+    val_cfg.test_evaluator = deepcopy(cfg.val_evaluator)
+    val_cfg.test_evaluator.outfile_prefix = str(
+        Path(cfg.work_dir) / "test_results" / "validation" / "levir_ship"
+    )
+    val_cfg.dump(str(val_output))
     return output
 
 
@@ -306,6 +388,11 @@ def find_checkpoint(work_dir: Path) -> Path:
 def run(command: list[str]) -> None:
     print("RUN", " ".join(map(str, command)))
     env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        value
+        for value in (str(mmdet_root()), env.get("PYTHONPATH", ""))
+        if value
+    )
     # MMEngine checkpoints contain HistoryBuffer objects. PyTorch 2.6+ defaults
     # torch.load() to weights_only=True, which rejects these trusted objects.
     env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
@@ -357,7 +444,7 @@ def run_job(
     work_dir = resolve_path(args.work_dir) / model_name
     if not args.test_only:
         command = [
-            sys.executable,
+            args.python,
             str(mmdet_root() / "tools" / "train.py"),
             str(config_path),
             "--work-dir",
@@ -366,19 +453,58 @@ def run_job(
         ]
         if args.amp:
             command.append("--amp")
+        if args.resume:
+            command.append("--resume")
         run(command)
+    if args.skip_test:
+        upload_work_dir_to_hf(model_name, args)
+        return
     checkpoint = find_checkpoint(work_dir)
-    run(
-        [
-            sys.executable,
-            str(mmdet_root() / "tools" / "test.py"),
-            str(config_path),
-            str(checkpoint),
-            "--work-dir",
-            str(work_dir / "test_results"),
-            "--out",
-            str(work_dir / "test_results" / "predictions.pkl"),
-        ]
+    configs = {
+        "validation": config_path.with_name("patched_config_val.py"),
+        "test": config_path,
+    }
+    annotations = {
+        "validation": dataset_out / "annotations" / "val.json",
+        "test": dataset_out / "annotations" / "test.json",
+    }
+    metrics: dict[str, Any] = {}
+    for split, split_config in configs.items():
+        result_dir = work_dir / "test_results" / split
+        run(
+            [
+                args.python,
+                str(mmdet_root() / "tools" / "test.py"),
+                str(split_config),
+                str(checkpoint),
+                "--work-dir",
+                str(result_dir),
+                "--out",
+                str(result_dir / "predictions.pkl"),
+            ]
+        )
+        metric_file = result_dir / "metrics.json"
+        run(
+            [
+                args.python,
+                str(repo_root() / "evaluate_coco_metrics.py"),
+                "--gt",
+                str(annotations[split]),
+                "--res",
+                str(result_dir / "levir_ship.bbox.json"),
+                "--out",
+                str(metric_file),
+            ]
+        )
+        metrics[split] = json.loads(metric_file.read_text(encoding="utf-8"))
+    final = {
+        "dataset": "LEVIR-Ship",
+        "model": model_name,
+        "seed": args.seed,
+        **metrics,
+    }
+    (work_dir / "final_results.json").write_text(
+        json.dumps(final, indent=2) + "\n", encoding="utf-8"
     )
     upload_work_dir_to_hf(model_name, args)
 
@@ -390,12 +516,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--work-dir", default="mmdetection/work_dirs/levir_baseline")
     parser.add_argument(
         "--models",
-        default="atss,retinanet,faster_rcnn,fcos",
-        help="Comma-separated: atss, retinanet, faster_rcnn, fcos.",
+        default="retinanet,cascade_rcnn,rtmdet",
+        help=(
+            "Comma-separated: atss, retinanet, faster_rcnn, fcos, "
+            "cascade_rcnn, rtmdet."
+        ),
     )
     parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        default=512,
+        help="Square resize used by the original baseline launcher.",
+    )
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--python",
+        default=default_python(),
+        help="Python executable used for MMDetection train/test subprocesses.",
+    )
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -406,6 +546,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--test-only", action="store_true")
+    parser.add_argument("--skip-test", action="store_true")
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument("--machine-index", type=int, default=0)
     parser.add_argument("--hf-repo-id", default="duyle2408/levir_ship_mmdet_runs")
