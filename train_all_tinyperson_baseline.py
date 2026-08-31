@@ -149,6 +149,7 @@ def pipeline(train: bool) -> list[dict[str, Any]]:
                 "img_path",
                 "ori_shape",
                 "img_shape",
+                "scale_factor",
                 "corner",
             ),
         )

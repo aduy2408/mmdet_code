@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Union
 
 from mmcv.transforms import LoadImageFromFile
+import numpy as np
 
 from mmdet.datasets import CocoDataset
 from mmdet.registry import DATASETS, TRANSFORMS
@@ -49,4 +50,5 @@ class LoadTinyPersonImageFromFile(LoadImageFromFile):
         results["img"] = image
         results["img_shape"] = image.shape[:2]
         results["ori_shape"] = image.shape[:2]
+        results["scale_factor"] = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
         return results
