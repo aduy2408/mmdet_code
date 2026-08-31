@@ -382,7 +382,15 @@ def find_checkpoint(work_dir: Path) -> Path:
     latest = work_dir / "latest.pth"
     if latest.is_file():
         return latest
-    raise FileNotFoundError(f"No best_*.pth or latest.pth in {work_dir}")
+    epochs = sorted(
+        work_dir.glob("epoch_*.pth"),
+        key=lambda path: int(path.stem.rsplit("_", 1)[-1]),
+    )
+    if epochs:
+        return epochs[-1]
+    raise FileNotFoundError(
+        f"No best_*.pth, latest.pth, or epoch_*.pth in {work_dir}"
+    )
 
 
 def run(command: list[str]) -> None:
