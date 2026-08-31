@@ -102,9 +102,18 @@ def evaluate(
     area_labels: list[str],
 ) -> COCOeval:
     ground_truth = COCO(str(gt_file))
-    evaluator = COCOeval(
-        ground_truth, ground_truth.loadRes(str(result_file)), "bbox"
-    )
+    results = json.loads(result_file.read_text(encoding="utf-8"))
+    if results:
+        detections = ground_truth.loadRes(results)
+    else:
+        detections = COCO()
+        detections.dataset = {
+            "images": ground_truth.dataset["images"],
+            "categories": ground_truth.dataset["categories"],
+            "annotations": [],
+        }
+        detections.createIndex()
+    evaluator = COCOeval(ground_truth, detections, "bbox")
     evaluator.params.iouThrs = iou_thresholds
     evaluator.params.maxDets = [1, 10, 200]
     evaluator.params.areaRng = area_ranges

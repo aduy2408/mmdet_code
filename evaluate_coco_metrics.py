@@ -22,6 +22,20 @@ def precision(evaluator: COCOeval, iou: float | None, area: str) -> float:
     return float(valid.mean()) if valid.size else -1.0
 
 
+def load_results(ground_truth: COCO, result_file: Path) -> COCO:
+    results = json.loads(result_file.read_text(encoding="utf-8"))
+    if results:
+        return ground_truth.loadRes(results)
+    detections = COCO()
+    detections.dataset = {
+        "images": ground_truth.dataset["images"],
+        "categories": ground_truth.dataset["categories"],
+        "annotations": [],
+    }
+    detections.createIndex()
+    return detections
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gt", type=Path, required=True)
@@ -30,7 +44,7 @@ def main() -> None:
     args = parser.parse_args()
 
     ground_truth = COCO(str(args.gt))
-    evaluator = COCOeval(ground_truth, ground_truth.loadRes(str(args.res)), "bbox")
+    evaluator = COCOeval(ground_truth, load_results(ground_truth, args.res), "bbox")
     evaluator.evaluate()
     evaluator.accumulate()
     evaluator.summarize()

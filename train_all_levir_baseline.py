@@ -491,6 +491,10 @@ def run_job(
                 str(result_dir / "predictions.pkl"),
             ]
         )
+        result_file = result_dir / "levir_ship.bbox.json"
+        if not result_file.is_file():
+            result_file.parent.mkdir(parents=True, exist_ok=True)
+            result_file.write_text("[]\n", encoding="utf-8")
         metric_file = result_dir / "metrics.json"
         run(
             [
@@ -499,7 +503,7 @@ def run_job(
                 "--gt",
                 str(annotations[split]),
                 "--res",
-                str(result_dir / "levir_ship.bbox.json"),
+                str(result_file),
                 "--out",
                 str(metric_file),
             ]
