@@ -16,6 +16,10 @@ from mmdet.datasets import CocoDataset
 from mmdet.registry import DATASETS, TRANSFORMS
 
 
+TILE_WIDTH = 640
+TILE_HEIGHT = 512
+
+
 @DATASETS.register_module()
 class TinyPersonDataset(CocoDataset):
     """COCO dataset that retains TinyBenchmark tile coordinates."""
@@ -47,6 +51,14 @@ class LoadTinyPersonImageFromFile(LoadImageFromFile):
                 f"Invalid TinyPerson corner {corner} for image shape {image.shape[:2]}"
             )
         image = image[y1:y2, x1:x2]
+        # Edge windows are smaller than 640x512. Pad them to the nominal tile
+        # size so batched CSPNeXt/PAN-FPN feature maps have compatible shapes.
+        if image.shape[1] != TILE_WIDTH or image.shape[0] != TILE_HEIGHT:
+            padded = np.zeros(
+                (TILE_HEIGHT, TILE_WIDTH, image.shape[2]), dtype=image.dtype
+            )
+            padded[: image.shape[0], : image.shape[1]] = image
+            image = padded
         results["img"] = image
         results["img_shape"] = image.shape[:2]
         results["ori_shape"] = image.shape[:2]
