@@ -303,7 +303,7 @@ def write_configs(model_name: str, args: argparse.Namespace) -> dict[str, Path]:
     prepared = prepare_validation_split(
         dataset_root,
         common.resolve_path(args.prepared_ann_dir),
-        args.seed,
+        args.split_seed,
         args.val_ratio,
     )
     train_images = ensure_erased_train_images(dataset_root, args.dry_run)
@@ -465,6 +465,12 @@ def parse_args() -> argparse.Namespace:
         help="Python executable used for MMDetection and metric subprocesses.",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=42,
+        help="Fixed source-image split seed; keep constant across training seeds.",
+    )
     parser.add_argument("--val-ratio", type=float, default=0.15)
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--amp", action="store_true")

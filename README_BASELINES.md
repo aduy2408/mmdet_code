@@ -95,6 +95,10 @@ all assigned configs without training.
   640x512 sliding-window annotations. Tiles remain at native scale and are
   cropped dynamically from source images. A deterministic 85/15 split is made
   by source image, preventing overlapping tiles from leaking into validation.
+  Keep `--split-seed 42` fixed while varying the training `--seed` across 42,
+  43, and 44. The split annotations are written to the shared prepared
+  annotation directory, while each training seed must use its own work
+  directory.
 
 ## Evaluation and outputs
 
