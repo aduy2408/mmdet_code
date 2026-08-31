@@ -209,6 +209,10 @@ def patch_config(
     # coordinates and must not be rescaled during validation or testing.
     cfg.model.test_cfg = deepcopy(cfg.model.get("test_cfg", {}))
     cfg.model.test_cfg.rescale = False
+    if model_name == "rtmdet":
+        # Edge windows can have dimensions smaller than the nominal tile size.
+        # Pad batches to a stride-compatible shape before CSPNeXt/PAN-FPN.
+        cfg.model.data_preprocessor.pad_size_divisor = 32
     if model_name == "retinanet":
         # TinyBenchmark starts RetinaNet anchors at 8 px on the stride-8 level.
         cfg.model.bbox_head.anchor_generator.octave_base_scale = 1
