@@ -161,7 +161,7 @@ def yolo_boxes(annotation_path: Path, width: int, height: int) -> list[list[floa
 def prepare_coco_dataset(args: argparse.Namespace) -> tuple[Path, Path]:
     data_root = resolve_path(args.data_root)
     dataset_out = resolve_path(args.dataset_out)
-    split_samples = split_by_scene(discover_samples(data_root), args.seed)
+    split_samples = split_by_scene(discover_samples(data_root), args.split_seed)
     annotation_dir = dataset_out / "annotations"
     annotation_dir.mkdir(parents=True, exist_ok=True)
 
@@ -551,6 +551,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=42,
+        help="Fixed seed for the scene-safe dataset split; independent of training seed.",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=0,
@@ -589,6 +595,7 @@ def main() -> None:
         raise ValueError(f"Unknown models: {', '.join(unknown)}")
 
     dataset_out, image_dir = prepare_coco_dataset(args)
+    print(f"Dataset split seed: {args.split_seed}; training seed: {args.seed}")
     assigned = [
         model
         for index, model in enumerate(models)

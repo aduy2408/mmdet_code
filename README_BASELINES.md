@@ -89,6 +89,8 @@ all assigned configs without training.
   baseline resize protocol. The default image size remains 512 for compatibility
   with the previous launcher. Pass `--image-size 768` to the LEVIR launcher if
   the earlier completed baselines used 768.
+  Keep `--split-seed 42` fixed while varying the training `--seed` for a valid
+  multi-seed comparison.
 - **TinyPerson:** uses the official erased-uncertain training archive and
   640x512 sliding-window annotations. Tiles remain at native scale and are
   cropped dynamically from source images. A deterministic 85/15 split is made

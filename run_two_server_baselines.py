@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--levir-root", default="LevirShipData")
     parser.add_argument("--tinyperson-root", default="../TinyPerson/tiny_set")
     parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--levir-batch-size", type=int, default=4)
     parser.add_argument("--tinyperson-batch-size", type=int, default=2)
     parser.add_argument("--num-workers", type=int, default=4)
@@ -80,6 +81,8 @@ def main() -> None:
                 args.levir_root,
                 "--epochs",
                 str(1 if args.smoke_test else args.epochs),
+                "--split-seed",
+                str(args.split_seed),
                 "--batch-size",
                 str(args.levir_batch_size),
                 "--num-workers",
