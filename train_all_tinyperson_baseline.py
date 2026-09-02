@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train RetinaNet, Cascade R-CNN, and RTMDet on TinyPerson tiles."""
+"""Train MMDetection baselines, including DETR and DINO, on TinyPerson tiles."""
 
 from __future__ import annotations
 
@@ -23,7 +23,11 @@ MODEL_CONFIGS = {
     "retinanet": "configs/retinanet/retinanet_r50_fpn_1x_coco.py",
     "cascade_rcnn": "configs/cascade_rcnn/cascade-rcnn_r50_fpn_1x_coco.py",
     "rtmdet": "configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",
+    "detr": "configs/detr/detr_r50_8xb2-150e_coco.py",
+    "dino": "configs/dino/dino-4scale_r50_8xb2-12e_coco.py",
 }
+# Keep the public launcher name short while documenting that this is the
+# denoising DINO-DETR implementation shipped with MMDetection.
 TRAIN_ANN = (
     "erase_with_uncertain_dataset/annotations/corner/task/"
     "tiny_set_train_sw640_sh512_all.json"
@@ -466,7 +470,12 @@ def parse_args() -> argparse.Namespace:
         default="mmdetection/data/tinyperson_baseline_seed42",
     )
     parser.add_argument(
-        "--models", default="retinanet,cascade_rcnn,rtmdet"
+        "--models",
+        default="retinanet,cascade_rcnn,rtmdet",
+        help=(
+            "Comma-separated: atss, fcos, faster_rcnn, retinanet, "
+            "cascade_rcnn, rtmdet, detr, dino."
+        ),
     )
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=2)

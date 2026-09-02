@@ -25,7 +25,10 @@ MODEL_CONFIGS = {
     "fcos": "configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py",
     "cascade_rcnn": "configs/cascade_rcnn/cascade-rcnn_r50_fpn_1x_coco.py",
     "rtmdet": "configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",
+    "detr": "configs/detr/detr_r50_8xb2-150e_coco.py",
+    "dino": "configs/dino/dino-4scale_r50_8xb2-12e_coco.py",
 }
+# ``dino`` selects MMDetection's DINO-DETR implementation.
 SPLIT_RATIOS = {"train": 0.70, "val": 0.15, "test": 0.15}
 SCENE_RE = re.compile(r"^(.*)_(-?\d+)_(-?\d+)$")
 
@@ -531,7 +534,7 @@ def parse_args() -> argparse.Namespace:
         default="retinanet,cascade_rcnn,rtmdet",
         help=(
             "Comma-separated: atss, retinanet, faster_rcnn, fcos, "
-            "cascade_rcnn, rtmdet."
+            "cascade_rcnn, rtmdet, detr, dino."
         ),
     )
     parser.add_argument("--epochs", type=int, default=12)

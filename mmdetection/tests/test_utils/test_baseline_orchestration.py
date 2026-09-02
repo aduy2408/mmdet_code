@@ -13,7 +13,7 @@ import train_all_tinyperson_baseline as tinyperson  # noqa: E402
 
 
 def test_model_and_machine_manifests():
-    expected = {'retinanet', 'cascade_rcnn', 'rtmdet'}
+    expected = {'retinanet', 'cascade_rcnn', 'rtmdet', 'detr', 'dino'}
     tinyperson_expected = expected | {'atss', 'fcos', 'faster_rcnn'}
     assert expected <= set(levir.MODEL_CONFIGS)
     assert tinyperson_expected == set(tinyperson.MODEL_CONFIGS)
