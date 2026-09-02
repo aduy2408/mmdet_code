@@ -212,7 +212,11 @@ def patch_config(
     cfg.auto_scale_lr = deepcopy(cfg.get("auto_scale_lr", {}))
     cfg.auto_scale_lr.enable = False
     cfg.auto_scale_lr.setdefault("base_batch_size", 16)
-    set_max_per_image(cfg.model, 200)
+    # DETR has only 100 object queries by default, so asking top-k for 200
+    # predictions makes MMDetection fail during validation. DINO has 900
+    # queries and keeps the larger TinyPerson cap.
+    max_per_image = min(200, int(cfg.model.get("num_queries", 200)))
+    set_max_per_image(cfg.model, max_per_image)
     # TinyPerson windows are loaded and cropped at native resolution. There is
     # no Resize transform, so predictions are already in the evaluator's tile
     # coordinates and must not be rescaled during validation or testing.
