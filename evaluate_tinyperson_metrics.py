@@ -183,6 +183,8 @@ def main() -> None:
         "ap50_tiny2": mean_precision(tiny, 0.50, "tiny2"),
         "ap50_tiny3": mean_precision(tiny, 0.50, "tiny3"),
         "ap50_small": mean_precision(tiny, 0.50, "small"),
+        # COCO AP-small: IoU 0.50:0.95, area=small.
+        "ap_small": mean_precision(coco, None, "small"),
     }
     args.out.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(metrics, indent=2))

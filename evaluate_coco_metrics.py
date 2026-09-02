@@ -56,6 +56,8 @@ def main() -> None:
         "ap50_tiny2": None,
         "ap50_tiny3": None,
         "ap50_small": precision(evaluator, 0.50, "small"),
+        # COCO AP-small: IoU 0.50:0.95, area=small.
+        "ap_small": precision(evaluator, None, "small"),
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
