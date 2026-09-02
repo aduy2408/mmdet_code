@@ -1,7 +1,8 @@
 # MMDetection baselines: LEVIR-Ship and TinyPerson
 
 This setup runs RetinaNet R50-FPN, Cascade R-CNN R50-FPN, and RTMDet-S on
-both datasets. The six jobs are split across two independent Marimo servers.
+both datasets. The launchers also support MMDetection's DETR and DINO-DETR
+implementations through the `detr` and `dino` model names.
 
 ## Environment
 
@@ -82,6 +83,20 @@ subprocess.run([
 
 Add `--resume` after an interrupted run. Use `--dry-run` to generate and inspect
 all assigned configs without training.
+
+To run the transformer baselines directly, use one launcher per dataset:
+
+```bash
+/marimo/mmdet-venv/bin/python /marimo/mmdet_code/train_all_tinyperson_baseline.py \
+  --models detr,dino --epochs 12 --amp
+
+/marimo/mmdet-venv/bin/python /marimo/mmdet_code/train_all_levir_baseline.py \
+  --models detr,dino --epochs 12 --amp --no-hf-upload
+```
+
+Run the same commands with `--dry-run` first to prepare and inspect the patched
+configs. DINO uses the four-scale R50 config and is substantially more
+memory-intensive than DETR, so reduce `--batch-size` if CUDA memory is limited.
 
 ## Dataset protocol
 
