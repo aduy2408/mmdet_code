@@ -17,9 +17,12 @@ python -m pip install "setuptools==60.2.0"
 # ------------------------------------------------------------------
 # Install PyTorch (CUDA 13.0)
 # ------------------------------------------------------------------
-python -m pip install torch torchvision \
+#python -m pip install torch torchvision \
+#    --index-url https://download.pytorch.org/whl/cu130
+pip install \
+    torch==2.13.0 \
+    torchvision==0.28.0 \
     --index-url https://download.pytorch.org/whl/cu130
-
 python - <<'PY'
 import torch
 print("torch:", torch.__version__)

@@ -1,0 +1,16 @@
+{
+  "generated_at_utc": "2026-07-31T07:38:50.623215+00:00",
+  "data_root": "/mnt/data/varroa/mmdetection/LevirShipData",
+  "coco_dir": "/mnt/data/varroa/mmdetection/mmdetection/data/levir_ship_coco_recovered/annotations",
+  "parameters": {
+    "mismatch_tolerance": 0.51,
+    "near_hash_distance": 4,
+    "gallery_size": 12
+  },
+  "input_counts": {
+    "png": 3896,
+    "txt": 3896,
+    "coco_json": 3
+  },
+  "input_digest": "a77e6a4079bce153159a179dd609458c1c8e983bb7c2905e1449326441ef31d2"
+}

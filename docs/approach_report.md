@@ -2,8 +2,8 @@
 
 ## 1. Phạm vi và baseline chung
 
-Báo cáo này tổng hợp code ở các branch `dbss`, `guided_alignment`, `haar`,
-`hard_transport`, `rcfn_ltmr` và `open_close`. Các hướng đều cố gắng cải thiện
+Báo cáo này tổng hợp code ở các branch `dbss`, `haar`, `hard_transport`,
+`rcfn_ltmr` và `open_close`. Các hướng đều cố gắng cải thiện
 đặc trưng mức thấp của detector cho tàu nhỏ, chủ yếu tại P3 của FPN. Baseline
 được dùng nhiều nhất là FCOS với ResNet-50-Caffe + FPN, một lớp `ship`, ảnh
 được resize về 512×512 hoặc 768×768 tùy experiment; resolution được ghi riêng
@@ -39,10 +39,8 @@ trên Hugging Face, không lấy từ tên checkpoint hay metric validation.
 | DBSS baseline, ridge, ridge+Haar, softmax | FCOS R50-FPN | 768 | 20 epoch, seed 42 | Có test JSON | 512; seed khác; detector khác |
 | DBSS ridge γ=0.3/0.6/1.0 | FCOS R50-FPN | 768 | 20 epoch, seed 42 | Có test JSON | γ tối ưu ở resolution/seed khác |
 | DBSS falsification controls | FCOS R50-FPN | 768 | 12 epoch, seed 42 | Có test JSON, protocol riêng | Schedule 20 epoch; nhiều seed |
-| DGFE + API | Intended FCOS/LEVIR | 512 | Config 12 epoch, seed 42 | Có code/config, **không có LEVIR test JSON** | Mọi run LEVIR, 768 và multi-seed |
 | PAHR cơ bản (`haar`) | FCOS R50-FPN | **512** | 40 epoch, seed 42 | Có test JSON | FCOS-512 baseline cùng protocol |
 | PAHR shift | FCOS R50-FPN | 768 | 40 epoch, seed 42 | Có test JSON | 512; nhiều seed |
-| Haar C2 wavelet fusion | FCOS R50-FPN | 768 | 40 epoch, seed 42 | Có test JSON | C2 ablation; nhiều seed |
 | PAHR-P2 và P2 baseline | Faster R-CNN R50-FPN | 768 | 20 epoch, seed 42 | **Controlled pair** có test JSON | 512; nhiều seed |
 | HIT probe/warmup/detached/joint | FCOS R50-FPN | Intended 512 | Config chính 12 epoch, seed 42; joint có seed 43 | Có config, **không có test artifact** | Chưa confirm stage nào chạy xong |
 | RCFN-R2, LTMR-L1 | FCOS R50-FPN | 512 | 30 epoch, seed 42 | Có test JSON | Baseline cùng schedule; 768; nhiều seed |
@@ -51,8 +49,8 @@ trên Hugging Face, không lấy từ tên checkpoint hay metric validation.
 | Positive top-hat vs raw-P3 matched control | FCOS R50-FPN | 768 | 30 epoch, seed 42 | **Controlled pair** có test result | Artifact HF; nhiều seed |
 
 Artifact hiện tại chủ yếu là **single-seed (42)**. Không method nào đã được
-xác minh đầy đủ ở cả 512 và 768 với ít nhất ba seed. `guided_alignment` và
-`hard_transport` mới dừng ở mức code/config đối với LEVIR-Ship; chưa có
+xác minh đầy đủ ở cả 512 và 768 với ít nhất ba seed. `hard_transport` mới
+dừng ở mức code/config đối với LEVIR-Ship; chưa có
 metric test công khai để xác nhận run hoàn tất.
 
 ## 2. `dbss` — Dynamic Background Subspace Suppression
@@ -140,7 +138,6 @@ baseline là `0.256/0.714/0.084`.
 
 | Variant | mAP | AP50 | AP75 | Δ mAP | Δ AP50 | Δ AP75 |
 |---|---:|---:|---:|---:|---:|---:|
-| Baseline | 0.256 | 0.714 | 0.084 | — | — | — |
 | Ridge | 0.247 | 0.705 | 0.082 | -0.009 | -0.009 | -0.002 |
 | Ridge + Haar | 0.267 | 0.717 | 0.110 | +0.011 | +0.003 | +0.026 |
 | Softmax | 0.266 | 0.722 | 0.085 | +0.010 | +0.008 | +0.001 |
@@ -171,86 +168,7 @@ nhân tạo cải thiện. Cần nhiều seed và control cùng protocol trướ
 định cơ chế DBSS. DBSS hiện **chỉ được xác minh ở 768**, chưa confirm rằng
 γ=0.6 hoặc thứ hạng các variant còn giữ nguyên ở 512.
 
-## 3. `guided_alignment` — DGFE + Adversarial Perturbation Injection
-
-### Method và purpose
-
-Branch `guided_alignment` hiện trỏ đúng commit nền `35cf22b1` và không có
-commit riêng phía sau commit này. Phần triển khai có thể xác minh trong lịch
-sử/repository là `FeatureAugmentNeck` với hai module:
-
-- **FeatureDGFE (image-guided feature enhancement).** Upsample đặc trưng P3 để
-  tái tạo RGB; sai khác tuyệt đối giữa ảnh tái tạo và ảnh input tạo spatial
-  gate. Spatial gate được kết hợp với channel gate (average/max pooling +
-  MLP), rồi nhân residual vào P3 qua hệ số `alpha` học được và bị chặn.
-- **Adversarial Perturbation Injection (API).** Chỉ hoạt động khi train. Module
-  giữ gradient của feature, chuẩn hóa nó thành perturbation có norm `rho`, chạy
-  pass bị perturb và dùng auxiliary foreground loss. Mục đích là buộc detector
-  ổn định trước nhiễu theo hướng bất lợi, đồng thời hướng attention về vùng có
-  khả năng chứa foreground.
-
-**Chi tiết DGFE.** Với \(X=P3\), module upsample \(X\) qua các `UpBlock` và
-tái tạo ảnh ba kênh \(\widehat I\in[0,1]\). Ảnh input được min-max normalize
-theo từng ảnh, sau đó:
-
-\[
-d=\operatorname{mean}_{RGB}|\widehat I-I|,\quad
-S=1+\sigma(k(d-t)).
-\]
-
-Trong code, threshold khởi tạo \(t=0.0156862\), sharpness \(k=10\). Channel
-gate là
-\[
-C=\sigma(\operatorname{MLP}(\operatorname{AvgPool}X)
-       +\operatorname{MLP}(\operatorname{MaxPool}X)).
-\]
-Output là
-\[
-X'=X\odot[1+\alpha(C\odot S-1)],
-\]
-trong đó \(\alpha=\alpha_{\max}\sigma(a)\), khởi tạo khoảng \(10^{-3}\).
-Vì vậy DGFE ban đầu gần identity; vùng khó tái tạo và kênh quan trọng mới được
-tăng dần. Code không thêm reconstruction loss riêng cho \(\widehat I\);
-reconstructor và gate được tối ưu thông qua detection loss.
-
-**Chi tiết API.** Ở clean pass, module giữ feature \(X\). Từ tổng detection
-loss cộng BCE của auxiliary foreground map, code lấy
-\(g=\nabla_X(L_{\mathrm{det}}+L_{\mathrm{aux}})\), rồi tạo perturbation:
-\[
-\delta=\rho\,\frac{g}{\lVert g\rVert_2+\epsilon}.
-\]
-Một adversarial pass thứ hai chạy với \(X+\delta\). Tổng objective thực tế gồm
-clean losses, `api_weight` nhân các detection losses của adversarial pass và
-`api_weight × BCE` của auxiliary head. Mặc định module khai báo
-\(\rho=0.02\), `api_weight=0.25`; inference bỏ hoàn toàn API.
-
-DGFE phục vụ **feature alignment theo ảnh**: vùng P3 khó tái tạo từ ngữ cảnh
-được tăng trọng số. API phục vụ **robust alignment khi train**. Khi inference,
-API trả nguyên feature; DGFE vẫn tham gia inference.
-
-### Kết quả
-
-Có artifact DGFE+API công khai tại
-[varroa_mmdet_runs_fcos_dgfe_api](https://huggingface.co/datasets/duyle2408/varroa_mmdet_runs_fcos_dgfe_api),
-nhưng đó là thí nghiệm Varroa, không phải LEVIR-Ship. Ba repo baseline
-[seed 42](https://huggingface.co/datasets/duyle2408/levir_ship_mmdet_runs_seed42),
-[seed 43](https://huggingface.co/datasets/duyle2408/levir_ship_mmdet_runs_seed43)
-và
-[seed 44](https://huggingface.co/datasets/duyle2408/levir_ship_mmdet_runs_seed44)
-không chứa run DGFE+API tương ứng. Do đó **không có kết quả LEVIR-Ship công
-khai có thể xác minh cho branch này** và không chuyển số Varroa sang bảng so
-sánh LEVIR.
-
-**Nhận xét.** Cơ chế gần identity và API train-only giúp giảm rủi ro phá
-baseline, nhưng branch không có diff độc lập và thiếu run LEVIR khớp protocol;
-hiệu quả trên bài toán tàu nhỏ chưa được chứng minh bằng artifact hiện có.
-
-**Đã test/chưa confirm.** Code LEVIR đặt resize 512×512, 12 epoch, seed 42,
-nhưng đây chỉ là cấu hình dự kiến. Không có test JSON để xác nhận run
-DGFE-only, API-only hay DGFE+API đã hoàn tất trên LEVIR. Artifact Varroa ba
-seed không xác nhận khả năng chuyển sang LEVIR và cũng không xác nhận 768.
-
-## 4. `haar` — Position-Aware Haar Recomposition (PAHR)
+## 3. `haar` — Position-Aware Haar Recomposition (PAHR)
 
 ### Method và purpose
 
@@ -267,8 +185,6 @@ vì khuếch đại dải cao trên toàn ảnh cũng khuếch đại sóng và 
    được học bằng Smooth L1 tại các tâm hợp lệ.
 4. Position/offset gate điều khiển detail mixer; residual của ba detail bands
    được inverse-Haar về không gian P3 và cộng lại qua correction gain.
-5. C2 guidance có thể được pixel-unshuffle/projection để cung cấp chi tiết
-   không gian có độ phân giải cao hơn.
 
 **Chi tiết Haar và recomposition.** Với mỗi block 2×2 của P3 gồm
 \((a,b;c,d)\), transform trực chuẩn trong code là:
@@ -278,8 +194,7 @@ L=(a+b+c+d)/2,\quad H=(a-b+c-d)/2,
 \[
 V=(a+b-c-d)/2,\quad D=(a-b-c+d)/2.
 \]
-Locator đọc \([L,H,V,D]\), và nếu bật guidance thì đọc thêm C2 đã projection
-và `pixel_unshuffle(4)`. `pixel_shuffle(2)` đưa output locator về lưới P3:
+Locator đọc \([L,H,V,D]\). `pixel_shuffle(2)` đưa output locator về lưới P3:
 kênh đầu là position logit \(z\), hai kênh sau là offset
 \((o_x,o_y)=\sigma(\cdot)\). Gate là
 \[
@@ -311,7 +226,6 @@ Các ablation chính:
 
 - `haar`: PAHR cơ bản.
 - `haar_shift_768`: dùng position/offset để dịch correction tại 768×768.
-- `haar_c2_wavelet_fusion_768`: Haar trên C2 rồi fusion vào P3.
 - `faster_rcnn_pahr_p2_768`: áp dụng PAHR ở nhánh P2 của Faster R-CNN, so với
   Faster R-CNN P2 cùng độ phân giải.
 
@@ -329,12 +243,9 @@ Nguồn: [fcos_test_haar](https://huggingface.co/datasets/duyle2408/fcos_test_ha
 | FCOS baseline | 768 | 40 / 42 | 0.272 | 0.735 | 0.100 | Baseline cho run 768 |
 | PAHR (`haar`) | **512** | 40 / 42 | 0.259 | 0.720 | 0.088 | **Không**: thiếu FCOS-512 cùng protocol |
 | PAHR shift | 768 | 40 / 42 | 0.258 | 0.718 | 0.096 | Có, Δ=-0.014/-0.017/-0.004 |
-| Haar C2 wavelet fusion | 768 | 40 / 42 | 0.227 | 0.697 | 0.052 | So với FCOS-768, nhưng đồng thời đổi neck |
 
 Không được lấy `0.259 - 0.272` để kết luận PAHR cơ bản giảm mAP, vì hai run
-khác resolution. Với cùng 768, PAHR shift thấp hơn FCOS `-0.014 mAP`, còn C2
-fusion thấp hơn `-0.045 mAP`; riêng C2 fusion cũng thay đổi neck nên chưa tách
-được phần giảm do Haar transform hay do cách fusion C2.
+khác resolution. Với cùng 768, PAHR shift thấp hơn FCOS `-0.014 mAP`.
 
 **Nhóm Faster R-CNN P2 ở 768×768.**
 
@@ -344,12 +255,11 @@ fusion thấp hơn `-0.045 mAP`; riêng C2 fusion cũng thay đổi neck nên ch
 | **Faster R-CNN PAHR-P2** | **0.273** | **0.701** | **0.103** | **+0.044** | **+0.056** | **+0.025** |
 
 **Nhận xét.** PAHR cơ bản 512 **chưa thể kết luận hơn/kém baseline** vì thiếu
-FCOS-512 cùng protocol. Ở 768, PAHR shift và C2 fusion không vượt FCOS; C2
-fusion giảm mạnh AP75. Ngược lại PAHR-P2 tăng rõ cả ba metric so với Faster
-R-CNN P2 cùng protocol 768. Kết quả P2 mới có seed 42; chưa confirm ở 512
-hoặc seed khác.
+FCOS-512 cùng protocol. Ở 768, PAHR shift không vượt FCOS. Ngược lại PAHR-P2
+tăng rõ cả ba metric so với Faster R-CNN P2 cùng protocol 768. Kết quả P2 mới
+có seed 42; chưa confirm ở 512 hoặc seed khác.
 
-## 5. `hard_transport` — Dual-Irreducibility Hard Information Transport
+## 4. `hard_transport` — Dual-Irreducibility Hard Information Transport
 
 ### Method và purpose
 
@@ -443,7 +353,7 @@ stage này. Report chỉ xác nhận **đã chuẩn bị cấu hình**, không x
 warmup, detached hay joint đã train/test thành công. Resolution 768,
 multi-seed hoàn chỉnh và so sánh baseline đều chưa được kiểm chứng.
 
-## 6. `rcfn_ltmr` — RCFN-R2, PG-RCFN và LTMR-L1
+## 5. `rcfn_ltmr` — RCFN-R2, PG-RCFN và LTMR-L1
 
 ### Method và purpose
 
@@ -555,7 +465,7 @@ floor/low-weight variant không giữ được mức tăng, và hai R2 artifact 
 khác nhau; chỉ nên kết luận trong từng protocol, chưa xem đây là kết quả
 đa-seed. PG-RCFN chưa được confirm ở 768, seed 43/44 hoặc detector khác FCOS.
 
-## 7. `open_close` — Local Morphological P3 Enhancement
+## 6. `open_close` — Local Morphological P3 Enhancement
 
 ### Ý tưởng và implementation ban đầu
 
@@ -638,13 +548,11 @@ Conv1×1 có cùng capacity và initialization. Tuy nhiên đây vẫn là một
 không có artifact HF và chưa so với baseline thuần trong chính lượt retry;
 chưa đủ để claim gain tổng quát hay thêm Gaussian/multi-scale.
 
-## 8. So sánh các approach
+## 7. So sánh các approach
 
 | Branch / method | Vùng can thiệp | Cơ chế chính | Supervision bổ sung | Có tác động inference? | Mục tiêu |
 |---|---|---|---|---|---|
 | `dbss` / DBSS | P3 | Dynamic background bases, ridge/softmax projection, bounded residual | Không bắt buộc; học qua detection loss | Có | Loại thành phần nền, làm nổi residual của tàu |
-| `guided_alignment` / DGFE | P3 | Image reconstruction error + spatial/channel gate | Tái tạo gián tiếp qua detection flow | Có | Tăng vùng feature khó khớp với ảnh |
-| `guided_alignment` / API | P3 | Gradient-normalized adversarial perturbation | Auxiliary foreground BCE | Không | Tăng robustness khi train |
 | `haar` / PAHR | P3 hoặc P2 | Haar decomposition, gated detail correction, inverse Haar | Gaussian position + offset loss | Có | Giữ/tái tổ hợp chi tiết tần số cao của tàu nhỏ |
 | `hard_transport` / HIT | P3 | Dual residual, sparse top-k, offset + Gaussian splat | Reconstruction + offset loss | Có | Chuyển thông tin khó tái tạo về phía object |
 | `rcfn_ltmr` / RCFN-R2 | P3 | Local-background standardization + residual contrast | Detection loss | Có | Tăng tương phản tàu so với nền cục bộ |
@@ -652,22 +560,61 @@ chưa đủ để claim gain tổng quát hay thêm Gaussian/multi-scale.
 | `rcfn_ltmr` / LTMR-L1 | FCOS logits | Positive-vs-local-hard-negative margin | Local margin loss | Không | Cải thiện ranking của tàu nhỏ khi train |
 | `open_close` / positive top-hat | P3 | Channel-wise opening + positive local-extrema residual | Detection loss | Có | So local positive anomaly với raw-P3 matched control |
 
-## 9. Kết luận
+## 8. `PhaseCongruency_SubPixelImplicitRefiner` — Phase-FPN & SubPixel-INR
 
-- Kết quả mạnh nhất trong sweep DBSS 768/seed-42 là ridge γ=0.6
-  (`mAP=0.282`), nhưng chưa test 512/multi-seed và falsification chưa chứng
-  minh lợi ích đến riêng từ background subspace.
-- PAHR cơ bản mới có run 512 nhưng thiếu FCOS-512 baseline. Ở 768, PAHR shift
-  và C2 fusion không vượt FCOS; PAHR-P2 tăng `+0.044 mAP` trên controlled
-  Faster R-CNN P2 pair, mới ở seed 42.
-- RCFN-R2 có chênh lệch tham khảo `+0.027 mAP`, chưa phải controlled baseline
-  pair. PG-CH tốt hơn R2 `+0.020 mAP` trong controlled ablation 512/seed-42.
-  LTMR-L1 chưa cho thấy lợi ích.
-- Chưa có kết quả LEVIR-Ship công khai xác minh được cho `guided_alignment`
-  và `hard_transport`; hiện chỉ xác nhận được code/config intended ở 512.
-- Morphology lượt đầu chỉ ngang Conv3×3 ở test mAP và bị ba confound lớn. Trong
-  matched control, positive thắng raw `+0.015 mAP` và `+0.016 AP-small`, đạt
-  gate định trước; cần baseline thuần và nhiều seed trước khi claim tổng quát.
-- Các bảng chủ yếu là single-run/single-seed. Bước xác nhận tối thiểu trước
-  khi chọn approach là chạy lại baseline và candidate tốt nhất trên cùng
-  protocol với ít nhất ba seed, rồi báo mean ± standard deviation.
+### Method và purpose
+
+Hai module plug-and-play (vào `C×H×W`, ra `C×H×W`, zero-initialized) nhằm khắc
+phục điểm yếu của haar trên LEVIR-Ship-768:
+
+- **Phase-FPN.** Tính Phase Congruency trên ảnh xám đầu vào (không phải
+  feature map semantic) để tránh phase cancellation trên 256 channel FPN.
+  Dùng 2D FFT, `num_masks=4` Gaussian bandpass learnable, và Hilbert-like odd
+  quadrature filter pairs (nhân `-1j·sign(freq)`) để tạo biên vật lý.
+  Map PC được downsample về kích thước P3 và dùng làm sigmoid gate cho
+  `conv_refine(x * pc_gate)`, scale bởi learnable `gamma=0`.
+- **SubPixel-INR.** Sample đặc trưng tại 4 vị trí phụ ±0.25 cell xung quanh
+  mỗi center bằng `_bilinear_shift` (replicate-pad + bilinear interpolation).
+  Mỗi vị trí được concat với Fourier position encoding (4 bands → 16 dim).
+  INR MLP (`Conv1×1 → SiLU → Conv1×1`) tổng hợp 4 sub-pixel feature rồi
+  aggregate qua attention `attn_heads`, kết quả cộng qua `zero_conv`.
+
+### Kết quả (FCOS R50-Caffe FPN, 768×768, 30 epoch, seed 42)
+
+Nguồn: [phase-subpixel-p3-levir-ablation](https://huggingface.co/datasets/duyle2408/phase-subpixel-p3-levir-ablation).
+
+#### V1 — Baseline implementation
+
+| Variant | Best val epoch | Test mAP | Test AP50 | Test AP75 | Test AP-small | Test AP-medium |
+|---|---:|---:|---:|---:|---:|---:|
+| Raw-P3 (baseline) | — | 0.259 | 0.719 | 0.092 | 0.258 | — |
+| **Phase-FPN v1** | 16 | 0.258 | 0.711 | 0.089 | 0.256 | 0.335 |
+| **SubPixel-INR v1** | — | 0.252 | 0.712 | 0.077 | 0.251 | 0.275 |
+
+**Nguyên nhân thất bại V1:**
+- Phase-FPN: averaging phase trên 256 semantic channel gây phase cancellation, biên không sắc.
+- SubPixel-INR: dùng 1×1 conv trên tọa độ sao chép → MLP hoàn toàn channel-wise, không truy cập spatial neighbor.
+
+#### V2 — Input-level Phase Congruency + Bilinear Spatial Sampling
+
+Fix: (1) chuyển PC sang ảnh xám đầu vào; (2) thêm `_bilinear_shift` vectorized lấy 4 neighbor feature theo offset quadrant.
+
+| Variant | Best val epoch | Test mAP | Test AP50 | Test AP75 | Test AP-small | Test AP-medium |
+|---|---:|---:|---:|---:|---:|---:|
+| Raw-P3 (baseline) | — | 0.259 | 0.719 | 0.092 | 0.258 | — |
+| **Phase-FPN v2** | 16 | 0.257 | 0.715 | 0.085 | 0.256 | 0.320 |
+| **SubPixel-INR v2** | 9 | 0.249 | 0.704 | 0.077 | 0.248 | 0.279 |
+
+**Nhận xét:** Phase-FPN ổn định hơn. SubPixel-INR val peak cao hơn (`0.290`) nhưng bị overfitting — test giảm xuống `0.249`.
+
+#### V3 — Hybrid: TopHat-Phase-FPN + RCFN-SubPixel-INR
+
+Fix: (1) áp morphological positive top-hat 3×3 trên ảnh xám trước FFT để khử nhiễu nền biển; (2) tính local background standardization (RCFN-like 8-neighbor ring mean/variance) trên feature map `x`, concat `[x, x_std]` trước khi bilinear sample. Sửa NaN do `sqrt(0)` ở top-hat region bằng cách thêm `+1e-12` bên trong mọi `torch.sqrt()`.
+
+| Variant | Best val epoch | Test mAP | Test AP50 | Test AP75 | Test AP-small | Test AP-medium |
+|---|---:|---:|---:|---:|---:|---:|
+| Raw-P3 (baseline) | — | 0.259 | 0.719 | 0.092 | 0.258 | — |
+| **TopHat-Phase-FPN v3** | 16 | 0.258 | 0.711 | 0.102 | 0.257 | 0.314 |
+| **RCFN-SubPixel-INR v3** | 9 | **0.273** | 0.727 | **0.106** | 0.271 | **0.374** |
+
+**Nhận xét:** SubPixel-INR v3 cải thiện `+0.021 mAP` so với V2 nhờ local background standardization giúp suppress ocean clutter trước khi INR query. AP75 đạt `0.106`, vượt baseline `+0.014`. Tuy nhiên test mAP tổng vẫn thấp hơn baseline `0.259`. Phase-FPN top-hat không cải thiện so với V2 — top-hat ở image level không cung cấp thêm signal so với raw grayscale cho PC. Overfitting vẫn là bottleneck chính với LEVIR-Ship training set nhỏ (~2,728 ảnh).

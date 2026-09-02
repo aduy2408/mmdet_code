@@ -1,0 +1,6 @@
+path: /mnt/data/varroa/mmdetection/LevirShipData
+train: /mnt/data/varroa/mmdetection/artifacts/yolo_assignment_levels/split_seed42/train.txt
+val: /mnt/data/varroa/mmdetection/artifacts/yolo_assignment_levels/split_seed42/val.txt
+test: /mnt/data/varroa/mmdetection/artifacts/yolo_assignment_levels/split_seed42/test.txt
+names:
+  0: ship

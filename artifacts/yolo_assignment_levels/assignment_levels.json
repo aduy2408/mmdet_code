@@ -1,0 +1,45 @@
+[
+  {
+    "model": "yolov8n_p3_p5",
+    "images": 584,
+    "gt_boxes": 763,
+    "total_positives": 4233,
+    "dominant_level": "P3",
+    "P3": 3444,
+    "P4": 738,
+    "P5": 51,
+    "P3_pct": 81.361,
+    "P4_pct": 17.434,
+    "P5_pct": 1.205
+  },
+  {
+    "model": "yolov8n_p2_baseline",
+    "images": 584,
+    "gt_boxes": 763,
+    "total_positives": 7456,
+    "dominant_level": "P2",
+    "P2": 7154,
+    "P3": 287,
+    "P4": 6,
+    "P5": 9,
+    "P2_pct": 95.95,
+    "P3_pct": 3.849,
+    "P4_pct": 0.08,
+    "P5_pct": 0.121
+  },
+  {
+    "model": "yolov8n_p2_offset",
+    "images": 584,
+    "gt_boxes": 763,
+    "total_positives": 7471,
+    "dominant_level": "P2",
+    "P2": 6678,
+    "P3": 763,
+    "P4": 23,
+    "P5": 7,
+    "P2_pct": 89.386,
+    "P3_pct": 10.213,
+    "P4_pct": 0.308,
+    "P5_pct": 0.094
+  }
+]

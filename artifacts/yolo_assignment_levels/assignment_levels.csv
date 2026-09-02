@@ -1,0 +1,4 @@
+P2,P2_pct,P3,P3_pct,P4,P4_pct,P5,P5_pct,dominant_level,gt_boxes,images,model,total_positives
+,,3444,81.361,738,17.434,51,1.205,P3,763,584,yolov8n_p3_p5,4233
+7154,95.95,287,3.849,6,0.08,9,0.121,P2,763,584,yolov8n_p2_baseline,7456
+6678,89.386,763,10.213,23,0.308,7,0.094,P2,763,584,yolov8n_p2_offset,7471
