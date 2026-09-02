@@ -273,6 +273,11 @@ def patch_config(
     image_dir: Path,
 ) -> Any:
     set_num_classes(cfg.model)
+    # MMDetection 3.3.0 requires both keys when tools/train.py receives
+    # --auto-scale-lr. Stock DETR/DINO configs only declare base_batch_size.
+    cfg.auto_scale_lr = deepcopy(cfg.get("auto_scale_lr", {}))
+    cfg.auto_scale_lr.enable = False
+    cfg.auto_scale_lr.setdefault("base_batch_size", 16)
     cfg.val_dataloader = deepcopy(cfg.val_dataloader)
     cfg.test_dataloader = deepcopy(cfg.test_dataloader)
     if model_name == "rtmdet":

@@ -207,6 +207,11 @@ def patch_config(
     test_ann: Path,
 ) -> Any:
     common.set_num_classes(cfg.model)
+    # MMDetection 3.3.0 requires both keys when tools/train.py receives
+    # --auto-scale-lr. Stock DETR/DINO configs only declare base_batch_size.
+    cfg.auto_scale_lr = deepcopy(cfg.get("auto_scale_lr", {}))
+    cfg.auto_scale_lr.enable = False
+    cfg.auto_scale_lr.setdefault("base_batch_size", 16)
     set_max_per_image(cfg.model, 200)
     # TinyPerson windows are loaded and cropped at native resolution. There is
     # no Resize transform, so predictions are already in the evaluator's tile
