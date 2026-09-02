@@ -132,3 +132,5 @@ varroa*/
 upload_data*.py
 hf_results/
 docs/ 
+# Model checkpoints
+*.pt
