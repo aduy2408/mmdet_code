@@ -286,7 +286,10 @@ def patch_dataset(
     train: bool,
 ) -> None:
     """Patch a dataset and wrap train data for MMDetection's Mosaic support."""
-    base = dataset.get("dataset", dataset) if train else dataset
+    # Copy plain datasets before assigning them under ``dataset.dataset``.
+    # Without this, non-YOLO configs make the wrapper point to itself and
+    # Config.dump() recurses forever.
+    base = deepcopy(dataset.get("dataset", dataset)) if train else dataset
     base.data_root = ""
     base.ann_file = str(dataset_out / "annotations" / f"{split}.json")
     base.data_prefix = dict(img=f"{image_dir}/")
