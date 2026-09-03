@@ -239,30 +239,68 @@ def set_resize_scale(obj: Any, image_size: int) -> None:
             set_resize_scale(value, image_size)
 
 
+def yolo_pipeline(image_size: int, train: bool, mosaic: bool = True) -> list[dict[str, Any]]:
+    """Build the bbox-only equivalent of Ultralytics' default train path.
+
+    Ultralytics defaults are mosaic=1, translate=.1, scale=.5, degrees=0,
+    shear=0, HSV=(.015,.7,.4), and fliplr=.5.  MMDetection's YOLOX
+    transforms expose the same operations, with HSV expressed in OpenCV
+    integer units (hue is 0..180, saturation/value are 0..255).
+    """
+    scale = (image_size, image_size)
+    pipeline: list[dict[str, Any]] = []
+    if train and mosaic:
+        pipeline.append(dict(type="Mosaic", img_scale=scale, pad_val=114.0))
+    if train:
+        pipeline.extend([
+            dict(
+                type="RandomAffine",
+                max_rotate_degree=0.0,
+                max_translate_ratio=0.1,
+                scaling_ratio_range=(0.5, 1.5),
+                max_shear_degree=0.0,
+                border=(-image_size // 2, -image_size // 2) if mosaic else (0, 0),
+            ),
+            dict(type="YOLOXHSVRandomAug", hue_delta=3,
+                 saturation_delta=179, value_delta=102),
+            dict(type="RandomFlip", prob=0.5),
+        ])
+    pipeline.extend([
+        dict(type="Resize", scale=scale, keep_ratio=True),
+        dict(type="Pad", pad_to_square=True,
+             pad_val=dict(img=(114.0, 114.0, 114.0))),
+    ])
+    if train:
+        pipeline.append(dict(type="FilterAnnotations", min_gt_bbox_wh=(1, 1),
+                             keep_empty=False))
+    pipeline.append(dict(type="PackDetInputs"))
+    return pipeline
+
+
 def patch_dataset(
     dataset: Any,
     dataset_out: Path,
     image_dir: Path,
     split: str,
     image_size: int,
+    train: bool,
 ) -> None:
-    dataset.data_root = ""
-    dataset.ann_file = str(dataset_out / "annotations" / f"{split}.json")
-    dataset.data_prefix = dict(img=f"{image_dir}/")
-    dataset.metainfo = dict(classes=("ship",))
-    set_resize_scale(dataset.pipeline, image_size)
-
-
-def simple_pipeline(image_size: int, train: bool) -> list[dict[str, Any]]:
-    pipeline = [
+    """Patch a dataset and wrap train data for MMDetection's Mosaic support."""
+    base = dataset.get("dataset", dataset) if train else dataset
+    base.data_root = ""
+    base.ann_file = str(dataset_out / "annotations" / f"{split}.json")
+    base.data_prefix = dict(img=f"{image_dir}/")
+    base.metainfo = dict(classes=("ship",))
+    base.pipeline = [
         dict(type="LoadImageFromFile", backend_args=None),
         dict(type="LoadAnnotations", with_bbox=True),
-        dict(type="Resize", scale=(image_size, image_size), keep_ratio=True),
     ]
     if train:
-        pipeline.append(dict(type="RandomFlip", prob=0.5))
-    pipeline.append(dict(type="PackDetInputs"))
-    return pipeline
+        dataset.type = "MultiImageMixDataset"
+        dataset.dataset = base
+        dataset.pipeline = yolo_pipeline(image_size, train=True)
+    else:
+        dataset.pipeline = base.pipeline + yolo_pipeline(image_size, train=False)
 
 
 def patch_config(
@@ -280,26 +318,14 @@ def patch_config(
     cfg.auto_scale_lr.setdefault("base_batch_size", 16)
     cfg.val_dataloader = deepcopy(cfg.val_dataloader)
     cfg.test_dataloader = deepcopy(cfg.test_dataloader)
-    if model_name == "rtmdet":
-        # The stock RTMDet-S recipe is 300 epochs and its pipeline switch is
-        # incompatible with a short baseline schedule. Keep the architecture,
-        # but use the same plain augmentation protocol as the other detectors.
-        cfg.train_dataloader.dataset.pipeline = simple_pipeline(args.image_size, True)
-        cfg.val_dataloader.dataset.pipeline = simple_pipeline(args.image_size, False)
-        cfg.test_dataloader.dataset.pipeline = simple_pipeline(args.image_size, False)
-        cfg.custom_hooks = [
-            hook for hook in cfg.get("custom_hooks", [])
-            if hook.get("type") != "PipelineSwitchHook"
-        ]
-
     patch_dataset(
-        cfg.train_dataloader.dataset, dataset_out, image_dir, "train", args.image_size
+        cfg.train_dataloader.dataset, dataset_out, image_dir, "train", args.image_size, True
     )
     patch_dataset(
-        cfg.val_dataloader.dataset, dataset_out, image_dir, "val", args.image_size
+        cfg.val_dataloader.dataset, dataset_out, image_dir, "val", args.image_size, False
     )
     patch_dataset(
-        cfg.test_dataloader.dataset, dataset_out, image_dir, "test", args.image_size
+        cfg.test_dataloader.dataset, dataset_out, image_dir, "test", args.image_size, False
     )
 
     for dataloader in (
@@ -314,6 +340,16 @@ def patch_config(
     cfg.test_evaluator.ann_file = str(dataset_out / "annotations" / "test.json")
     cfg.train_cfg.max_epochs = args.epochs
     cfg.train_cfg.val_interval = 1
+    cfg.custom_imports = dict(imports=["mmdet.engine.hooks"], allow_failed_imports=False)
+    cfg.custom_hooks = [
+        hook for hook in cfg.get("custom_hooks", [])
+        if hook.get("type") != "PipelineSwitchHook"
+    ]
+    cfg.custom_hooks.append(dict(
+        type="PipelineSwitchHook",
+        switch_epoch=max(0, args.epochs - 10),
+        switch_pipeline=yolo_pipeline(args.image_size, train=True, mosaic=False),
+    ))
     if model_name == "rtmdet":
         milestones = sorted({
             epoch

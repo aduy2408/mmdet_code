@@ -27,13 +27,15 @@ def test_model_and_machine_manifests():
     }
 
 
-def test_tinyperson_pipeline_keeps_native_tile_scale():
+def test_tinyperson_pipeline_matches_yolo_augmentation_protocol():
     pipeline = tinyperson.pipeline(train=True)
     assert pipeline[0]['type'] == 'LoadTinyPersonImageFromFile'
-    assert not any(transform['type'] == 'Resize' for transform in pipeline)
-    assert tinyperson.dataset_config(
-        Path('ann.json'), Path('images'), True, 0
-    )['filter_cfg']['filter_empty_gt']
+    assert [transform['type'] for transform in pipeline[2:]] == [
+        'Mosaic', 'RandomAffine', 'YOLOXHSVRandomAug', 'RandomFlip',
+        'Resize', 'Pad', 'FilterAnnotations', 'PackDetInputs'
+    ]
+    dataset = tinyperson.dataset_config(Path('ann.json'), Path('images'), True, 0)
+    assert dataset['dataset']['filter_cfg']['filter_empty_gt']
 
 
 def test_validation_split_has_no_source_leakage(tmp_path):

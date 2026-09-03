@@ -39,6 +39,14 @@ MERGED_TRAIN_ANN = (
 )
 
 
+def pipeline(train: bool, image_size: int = 640) -> list[dict[str, Any]]:
+    """Return the complete TinyPerson pipeline for inspection and reuse."""
+    return [
+        dict(type="LoadTinyPersonImageFromFile", backend_args=None),
+        dict(type="LoadAnnotations", with_bbox=True),
+    ] + common.yolo_pipeline(image_size, train=train)
+
+
 def safe_extract(archive: Path, destination: Path) -> None:
     """Extract a trusted dataset archive after preventing path traversal."""
     destination = destination.resolve()
@@ -141,36 +149,14 @@ def prepare_validation_split(
     return paths
 
 
-def pipeline(train: bool) -> list[dict[str, Any]]:
-    transforms: list[dict[str, Any]] = [
-        dict(type="LoadTinyPersonImageFromFile", backend_args=None),
-        dict(type="LoadAnnotations", with_bbox=True),
-    ]
-    if train:
-        transforms.append(dict(type="RandomFlip", prob=0.5))
-    transforms.append(
-        dict(
-            type="PackDetInputs",
-            meta_keys=(
-                "img_id",
-                "img_path",
-                "ori_shape",
-                "img_shape",
-                "scale_factor",
-                "corner",
-            ),
-        )
-    )
-    return transforms
-
-
 def dataset_config(
     ann_file: Path,
     image_dir: Path,
     train: bool,
     limit: int,
+    image_size: int = 640,
 ) -> dict[str, Any]:
-    dataset = dict(
+    base = dict(
         type="TinyPersonDataset",
         data_root="",
         ann_file=str(ann_file),
@@ -178,11 +164,23 @@ def dataset_config(
         metainfo=dict(classes=("person",)),
         filter_cfg=dict(filter_empty_gt=train, min_size=1),
         test_mode=not train,
-        pipeline=pipeline(train),
+        pipeline=[
+            dict(type="LoadTinyPersonImageFromFile", backend_args=None),
+            dict(type="LoadAnnotations", with_bbox=True),
+        ],
     )
     if limit > 0:
-        dataset["indices"] = limit
-    return dataset
+        base["indices"] = limit
+    if not train:
+        base["pipeline"] = base["pipeline"] + common.yolo_pipeline(
+            image_size, train=False
+        )
+        return base
+    return dict(
+        type="MultiImageMixDataset",
+        dataset=base,
+        pipeline=common.yolo_pipeline(image_size, train=True),
+    )
 
 
 def set_max_per_image(obj: Any, maximum: int) -> None:
@@ -217,9 +215,7 @@ def patch_config(
     # queries and keeps the larger TinyPerson cap.
     max_per_image = min(200, int(cfg.model.get("num_queries", 200)))
     set_max_per_image(cfg.model, max_per_image)
-    # TinyPerson windows are loaded and cropped at native resolution. There is
-    # no Resize transform, so predictions are already in the evaluator's tile
-    # coordinates and must not be rescaled during validation or testing.
+    # Keep evaluator coordinates consistent with the resized/padded tile path.
     cfg.model.test_cfg = deepcopy(cfg.model.get("test_cfg", {}))
     cfg.model.test_cfg.rescale = False
     if model_name == "rtmdet":
@@ -233,19 +229,20 @@ def patch_config(
         # The stock scale 8 produces 32 px anchors on P2. Scale 2 starts at 8 px.
         cfg.model.rpn_head.anchor_generator.scales = [2]
     cfg.custom_imports = dict(
-        imports=["projects.tinyperson_baselines"], allow_failed_imports=False
+        imports=["projects.tinyperson_baselines", "mmdet.engine.hooks"],
+        allow_failed_imports=False,
     )
     cfg.train_dataloader = deepcopy(cfg.train_dataloader)
     cfg.val_dataloader = deepcopy(cfg.val_dataloader)
     cfg.test_dataloader = deepcopy(cfg.test_dataloader)
     cfg.train_dataloader.dataset = dataset_config(
-        train_ann, train_images, True, args.limit
+        train_ann, train_images, True, args.limit, args.image_size
     )
     cfg.test_dataloader.dataset = dataset_config(
-        test_ann, test_images, False, args.limit
+        test_ann, test_images, False, args.limit, args.image_size
     )
     cfg.val_dataloader.dataset = dataset_config(
-        val_ann, train_images, False, args.limit
+        val_ann, train_images, False, args.limit, args.image_size
     )
     for dataloader in (
         cfg.train_dataloader,
@@ -259,6 +256,17 @@ def patch_config(
     cfg.train_cfg.max_epochs = args.epochs
     cfg.train_cfg.pop("dynamic_intervals", None)
     cfg.train_cfg.val_interval = 1
+    cfg.custom_hooks = [
+        hook for hook in cfg.get("custom_hooks", [])
+        if hook.get("type") != "PipelineSwitchHook"
+    ]
+    cfg.custom_hooks.append(dict(
+        type="PipelineSwitchHook",
+        switch_epoch=max(0, args.epochs - 10),
+        switch_pipeline=common.yolo_pipeline(
+            args.image_size, train=True, mosaic=False
+        ),
+    ))
 
     milestones = sorted({
         epoch
@@ -487,6 +495,10 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument(
+        "--image-size", type=int, default=640,
+        help="Square YOLO-style training size used by Mosaic/Resize.",
+    )
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument(
