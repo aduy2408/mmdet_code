@@ -521,6 +521,23 @@ def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
         private=False,
         exist_ok=True,
     )
+
+
+def require_upload_context(args: argparse.Namespace) -> None:
+    """Fail before dataset preparation/training when upload cannot succeed."""
+    if not args.hf_repo_id:
+        raise ValueError("Hugging Face repository is required for this upload-required workflow")
+    if not (args.hf_token or os.environ.get("HF_TOKEN")):
+        raise ValueError("HF_TOKEN is required before training starts")
+    if os.environ.get("MARIMO_TRAIN_WORKFLOW") != "1":
+        raise ValueError(
+            "Upload-required MMDetection training must be launched through "
+            "python -m utils.marimo_ops launch"
+        )
+    try:
+        import huggingface_hub  # noqa: F401
+    except ImportError as exc:
+        raise ImportError("huggingface_hub is required before training starts") from exc
     print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{repo_id}/{model_name}")
     api.upload_folder(
         folder_path=str(work_dir),
@@ -716,6 +733,8 @@ def main() -> None:
         raise ValueError("--num-machines must be >= 1")
     if not 0 <= args.machine_index < args.num_machines:
         raise ValueError("--machine-index must be in [0, num_machines)")
+    if not args.dry_run:
+        require_upload_context(args)
     args.data_root = str(
         resolve_dataset_root(
             args.data_root,
