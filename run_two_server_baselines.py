@@ -53,10 +53,6 @@ def main() -> None:
     args = parse_args()
     code_root = args.code_root.resolve()
     python = Path(args.python)
-    jobs = JOBS[args.machine]
-    print(f"Machine {args.machine} jobs: {jobs}")
-    if args.list:
-        return
     if args.install:
         subprocess.run(["bash", args.install_script], check=True)
     if not python.is_file():
@@ -64,6 +60,11 @@ def main() -> None:
             f"MMDetection Python not found: {python}. Run with --install or execute "
             f"bash {args.install_script} first."
         )
+
+    jobs = JOBS[args.machine]
+    print(f"Machine {args.machine} jobs: {jobs}")
+    if args.list:
+        return
 
     env = os.environ.copy()
     env["MMDET_PYTHON"] = str(python)
