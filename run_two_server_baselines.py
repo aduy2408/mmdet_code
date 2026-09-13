@@ -40,6 +40,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tinyperson-batch-size", type=int, default=2)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--amp", action="store_true")
+    parser.add_argument("--hf-repo-id", default="duyle2408/mmdet_baseline_runs")
+    parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
@@ -86,7 +88,9 @@ def main() -> None:
                     "--work-dir", str(work_dir),
                     "--batch-size", str(args.levir_batch_size),
                     "--num-workers", str(args.num_workers),
-                    "--python", str(python), "--no-hf-upload",
+                    "--python", str(python),
+                    "--hf-repo-id", args.hf_repo_id,
+                    "--hf-repo-type", args.hf_repo_type,
                 ]
                 if args.smoke_test:
                     command += ["--limit", "16"]
@@ -101,6 +105,8 @@ def main() -> None:
                     "--batch-size", str(args.tinyperson_batch_size),
                     "--num-workers", str(args.num_workers),
                     "--python", str(python),
+                    "--hf-repo-id", args.hf_repo_id,
+                    "--hf-repo-type", args.hf_repo_type,
                 ]
                 if args.smoke_test:
                     command += ["--limit", "32", "--skip-final-metrics"]

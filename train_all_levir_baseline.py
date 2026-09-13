@@ -455,21 +455,18 @@ def run(command: list[str]) -> None:
 
 
 def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
-    if args.no_hf_upload:
-        return
     token = args.hf_token or os.environ.get("HF_TOKEN")
     if not token:
         raise ValueError(
-            "Hugging Face upload requires --hf-token or HF_TOKEN; "
-            "pass --no-hf-upload to skip."
+            "Hugging Face upload is mandatory for this workflow. "
+            "Provide --hf-token or HF_TOKEN in the Marimo launch environment."
         )
 
     try:
         from huggingface_hub import HfApi
     except ImportError as exc:
         raise ImportError(
-            "Hugging Face upload requires `huggingface_hub`; "
-            "install it or pass --no-hf-upload."
+            "Hugging Face upload requires `huggingface_hub`; install it before training."
         ) from exc
 
     work_dir = resolve_path(args.work_dir) / model_name
@@ -487,6 +484,20 @@ def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
         repo_id=args.hf_repo_id,
         repo_type=args.hf_repo_type,
     )
+    marker = work_dir / "upload_complete.json"
+    marker.write_text(
+        json.dumps(
+            {
+                "repo_id": args.hf_repo_id,
+                "repo_type": args.hf_repo_type,
+                "path_in_repo": model_name,
+                "verified": True,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def run_job(
@@ -497,6 +508,32 @@ def run_job(
 ) -> None:
     config_path = write_config(model_name, args, dataset_out, image_dir)
     work_dir = resolve_path(args.work_dir) / model_name
+    (work_dir / "experiment_manifest.json").write_text(
+        json.dumps(
+            {
+                "experiment_type": "baseline",
+                "dataset": "LEVIR-Ship",
+                "model": model_name,
+                "canonical_config": MODEL_CONFIGS[model_name],
+                "patched_config": str(config_path),
+                "source_commit": subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"], cwd=repo_root(), text=True
+                ).strip(),
+                "data_root": str(resolve_path(args.data_root)),
+                "split_seed": args.split_seed,
+                "training_seed": args.seed,
+                "epochs": args.epochs,
+                "batch_size": args.batch_size,
+                "amp": args.amp,
+                "hf_repo_id": args.hf_repo_id,
+                "hf_repo_type": args.hf_repo_type,
+                "upload_required": True,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     if not args.test_only:
         command = [
             args.python,
@@ -621,11 +658,6 @@ def parse_args() -> argparse.Namespace:
         "--hf-token",
         default="",
         help="Hugging Face token. Defaults to HF_TOKEN from the environment.",
-    )
-    parser.add_argument(
-        "--no-hf-upload",
-        action="store_true",
-        help="Skip uploading each completed model to Hugging Face.",
     )
     return parser.parse_args()
 
