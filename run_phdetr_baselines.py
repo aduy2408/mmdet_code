@@ -64,6 +64,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-size", type=int)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--python", default="/marimo/mmdet-venv/bin/python")
     parser.add_argument("--phdetr-root", default="/marimo/PH-DETR")
     parser.add_argument("--work-root")
@@ -98,7 +99,7 @@ def prepare_dataset(args: argparse.Namespace, settings: dict[str, Any]) -> dict[
         ns.data_root = args.data_root
         ns.dataset_out = args.prepared_dir
         ns.split_seed = args.split_seed
-        ns.limit = 0
+        ns.limit = args.limit
         dataset_out, image_dir = levir.prepare_coco_dataset(ns)
         return {
             "train_ann": dataset_out / "annotations/train.json",
@@ -369,6 +370,10 @@ def main() -> None:
     args = parse_args()
     if not args.dataset:
         raise SystemExit("--dataset is required; run one dataset/seed per Marimo queue item")
+    if args.smoke_test:
+        args.epochs = 1
+        if args.limit == 0 and args.dataset == "levirship":
+            args.limit = 64
     run_one(args)
 
 
