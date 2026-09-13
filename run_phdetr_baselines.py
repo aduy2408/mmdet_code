@@ -164,6 +164,14 @@ def make_config(
                 "img_folder": str(active_images),
                 "ann_file": str(active_ann),
                 "return_masks": False,
+                "transforms": {
+                    "type": "Compose",
+                    "ops": [
+                        {"type": "Resize", "size": [image_size, image_size]},
+                        {"type": "ConvertPILImage", "dtype": "float32", "scale": True},
+                        {"type": "ConvertBoxes", "fmt": "cxcywh", "normalize": True},
+                    ],
+                },
             },
             "total_batch_size": batch_size,
             "num_workers": args.num_workers,
@@ -179,6 +187,13 @@ def make_config(
                 "img_folder": str(validation_images),
                 "ann_file": str(validation_ann),
                 "return_masks": False,
+                "transforms": {
+                    "type": "Compose",
+                    "ops": [
+                        {"type": "Resize", "size": [image_size, image_size]},
+                        {"type": "ConvertPILImage", "dtype": "float32", "scale": True},
+                    ],
+                },
             },
             "total_batch_size": 1,
             "num_workers": args.num_workers,
