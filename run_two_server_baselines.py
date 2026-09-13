@@ -11,11 +11,13 @@ from pathlib import Path
 
 JOBS = {
     1: [
-        ("levir", "detr"),
-        ("tinyperson", "detr"),
+        ("levir", "retinanet"),
+        ("tinyperson", "cascade_rcnn"),
+        ("levir", "rtmdet"),
     ],
     2: [
-        ("levir", "rtmdet"),
+        ("tinyperson", "retinanet"),
+        ("levir", "cascade_rcnn"),
         ("tinyperson", "rtmdet"),
     ],
 }
@@ -40,8 +42,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--amp", action="store_true")
     parser.add_argument(
         "--levir-hf-repo-template",
-        default="duyle2408/levir_ship_mmdet_runs_seed{seed}",
-        help="Hugging Face dataset ID template for LEVIR-Ship.",
+        default="",
+        help="Hugging Face dataset ID template, e.g. namespace/levir_mmdet_runs_seed{seed}.",
     )
     parser.add_argument(
         "--tinyperson-hf-repo-template",
@@ -64,6 +66,11 @@ def main() -> None:
     print(f"Machine {args.machine} jobs: {jobs}")
     if args.list:
         return
+    if not args.levir_hf_repo_template:
+        raise ValueError(
+            "--levir-hf-repo-template is required for real runs so LEVIR uploads "
+            "cannot silently target the wrong dataset."
+        )
     if args.install:
         subprocess.run(["bash", args.install_script], check=True)
     if not python.is_file():

@@ -696,11 +696,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument("--machine-index", type=int, default=0)
-    parser.add_argument(
-        "--hf-repo-id",
-        default="duyle2408/levir_ship_mmdet_runs_seed{seed}",
-        help="Hugging Face dataset ID; {seed} is replaced with the training seed.",
-    )
+    parser.add_argument("--hf-repo-id", required=True)
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument(
         "--hf-token",
