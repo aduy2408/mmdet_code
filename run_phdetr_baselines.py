@@ -169,7 +169,10 @@ def make_config(
         "num_classes": 2,
         "eval_spatial_size": [image_size, image_size],
         "epoches": args.epochs,
-        "checkpoint_freq": 1,
+        # Keep the required best checkpoint and the rolling last checkpoint,
+        # but do not emit checkpoint0000.pth, checkpoint0001.pth, etc. during
+        # normal runs.  The configured epoch count is always below this.
+        "checkpoint_freq": args.epochs + 1,
         "use_amp": not args.no_amp,
         "use_ema": True,
         "find_unused_parameters": True,
