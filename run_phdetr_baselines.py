@@ -224,6 +224,21 @@ def run_command(command: list[str], cwd: Path, log_path: Path) -> str:
     return log_path.read_text(encoding="utf-8", errors="replace")
 
 
+def native_train_command(python: str, phdetr_root: Path, config: Path, *extra: str) -> list[str]:
+    """Use one-process torchrun because PH-DETR calls distributed APIs at init."""
+    return [
+        python,
+        "-m",
+        "torch.distributed.run",
+        "--nproc_per_node=1",
+        "--master_port=29511",
+        str(phdetr_root / "train.py"),
+        "-c",
+        str(config),
+        *extra,
+    ]
+
+
 def metric_rows(text: str) -> list[list[float]]:
     rows: list[list[float]] = []
     for match in re.finditer(r"coco_eval_bbox['\"]?\s*:\s*(\[[^\]]+\])", text):
@@ -325,7 +340,14 @@ def run_one(args: argparse.Namespace) -> Path:
         raise RuntimeError("HF_TOKEN is required before training")
 
     train_log = run_command(
-        [args.python, str(phdetr_root / "train.py"), "-c", str(train_config), "--use-amp", "--seed", str(args.seed)],
+        native_train_command(
+            args.python,
+            phdetr_root,
+            train_config,
+            "--use-amp",
+            "--seed",
+            str(args.seed),
+        ),
         phdetr_root,
         work_dir / "train.log",
     )
@@ -335,18 +357,17 @@ def run_one(args: argparse.Namespace) -> Path:
     if not checkpoint.is_file():
         raise FileNotFoundError(f"PH-DETR did not produce a best checkpoint in {work_dir}")
     test_log = run_command(
-        [
+        native_train_command(
             args.python,
-            str(phdetr_root / "train.py"),
-            "-c",
-            str(test_config),
+            phdetr_root,
+            test_config,
             "-r",
             str(checkpoint),
             "--test-only",
             "--use-amp",
             "--seed",
             str(args.seed),
-        ],
+        ),
         phdetr_root,
         work_dir / "test.log",
     )
