@@ -20,6 +20,7 @@ def preflight(
     dataset_root: str,
     split_seed: int,
     training_seed: int,
+    env: dict[str, str] | None = None,
 ) -> None:
     """Reject commands that contradict the recorded experiment manifest."""
     command = list(command)
@@ -37,7 +38,7 @@ def preflight(
         raise ValueError("manifest training seed does not match launch intent")
     if manifest.get("upload_required") is not True:
         raise ValueError("PH-DETR runs must require Hugging Face upload")
-    if not os.environ.get("HF_TOKEN"):
+    if not (env or os.environ).get("HF_TOKEN"):
         raise RuntimeError("HF_TOKEN is absent from the live Marimo kernel")
 
 
