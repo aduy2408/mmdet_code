@@ -74,6 +74,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hf-prefix", default="phdetr")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument(
+        "--no-amp",
+        action="store_true",
+        help="Disable native PH-DETR autocast when the installed CUDA/PyTorch stack produces NaNs.",
+    )
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
@@ -160,7 +165,7 @@ def make_config(
         "eval_spatial_size": [image_size, image_size],
         "epoches": args.epochs,
         "checkpoint_freq": 1,
-        "use_amp": True,
+        "use_amp": not args.no_amp,
         "use_ema": True,
         "train_dataloader": {
             "dataset": {
@@ -347,7 +352,7 @@ def run_one(args: argparse.Namespace) -> Path:
         "batch_size": args.batch_size or settings["batch_size"],
         "epochs": args.epochs,
         "patience": "none",
-        "amp": True,
+        "amp": not args.no_amp,
         "nms_iou": "not_applicable_native_phdetr",
         "hf_repo": args.hf_repo_id,
         "hf_remote_prefix": f"{args.hf_prefix}/{work_dir.name}",
@@ -368,7 +373,7 @@ def run_one(args: argparse.Namespace) -> Path:
             args.python,
             entrypoint,
             train_config,
-            "--use-amp",
+            *(('--use-amp',) if not args.no_amp else ()),
             "--seed",
             str(args.seed),
         ),
@@ -388,7 +393,7 @@ def run_one(args: argparse.Namespace) -> Path:
             "-r",
             str(checkpoint),
             "--test-only",
-            "--use-amp",
+            *(('--use-amp',) if not args.no_amp else ()),
             "--seed",
             str(args.seed),
         ),
