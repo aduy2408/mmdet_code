@@ -79,6 +79,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable native PH-DETR autocast when the installed CUDA/PyTorch stack produces NaNs.",
     )
+    parser.add_argument(
+        "--use-pretrained",
+        action="store_true",
+        help="Opt into the PH-DETR HGNetv2 checkpoint. Clean initialization is the default.",
+    )
     parser.add_argument("--resume", action="store_true")
     return parser.parse_args()
 
@@ -208,6 +213,7 @@ def make_config(
             "num_workers": args.num_workers,
         },
         "HGNetv2": {
+            "pretrained": args.use_pretrained,
             "name": "B2",
             "return_idx": [0, 1, 2, 3],
             "freeze_at": -1,
@@ -357,7 +363,7 @@ def run_one(args: argparse.Namespace) -> Path:
         "dataset_root": str(resolve(args.data_root)),
         "split_seed": args.split_seed,
         "training_seed": args.seed,
-        "model_backbone_pretrained": "PH-DETR DFINE with HGNetv2-B2 pretrained=True; num_classes=2 for 1-based COCO labels",
+        "model_backbone_pretrained": f"PH-DETR DFINE with HGNetv2-B2 pretrained={args.use_pretrained}; num_classes=2 for 1-based COCO labels",
         "image_size": args.image_size or settings["image_size"],
         "batch_size": args.batch_size or settings["batch_size"],
         "epochs": args.epochs,
