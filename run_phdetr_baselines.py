@@ -277,7 +277,16 @@ def metric_rows(text: str) -> list[list[float]]:
             continue
         if isinstance(row, list) and row and all(isinstance(v, (float, int)) for v in row):
             rows.append([float(v) for v in row])
-    return rows
+    if rows:
+        return rows
+    summary = []
+    for line in text.splitlines():
+        if "Average Precision" not in line:
+            continue
+        match = re.search(r"=\s*(-?\d+(?:\.\d+)?)\s*$", line)
+        if match:
+            summary.append(float(match.group(1)))
+    return [summary[:6]] if len(summary) >= 6 else []
 
 
 def metric_dict(rows: list[list[float]]) -> dict[str, float | None]:
