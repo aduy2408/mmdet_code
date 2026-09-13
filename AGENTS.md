@@ -10,6 +10,9 @@ Read `/mnt/data/varroa/AGENTS.md` first. This file adds MMDetection-specific rul
 - `HF_TOKEN` comes from the live Marimo global kernel namespace. Never print, store, or pass it in a command-line argument. Pass it only through the detached child environment.
 - If upload is required, fail before training when auth, the target repo, or the upload verifier is missing. Never add `--no-hf-upload` or silently skip upload.
 
+- MMDetection work normally starts from `/mnt/data/varroa` so `yolo_related` is available as a reference corpus. Do not modify YOLO files during an MMDetection task unless the request explicitly names a cross-project change.
+- If a YOLO implementation is used as a reference, record the source path/commit and the MMDetection-specific adaptation. Do not infer MMDetection behavior, pretrained settings, or configs from YOLO filenames.
+
 ## Matrix and provenance
 
 - Current requested baseline matrix: `DETR` and `RTMDet` on both `LEVIR-Ship` and `TinyPerson`, training seeds `42, 43, 44`, fixed split seed `42`.
