@@ -167,6 +167,7 @@ def make_config(
         "checkpoint_freq": 1,
         "use_amp": not args.no_amp,
         "use_ema": True,
+        "find_unused_parameters": True,
         "train_dataloader": {
             "dataset": {
                 "img_folder": str(active_images),
