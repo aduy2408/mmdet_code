@@ -14,13 +14,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-try:
-    import train_all_levir_baseline as common
-except ModuleNotFoundError:
-    # Support `python -m mmdetection.train_all_tinyperson_baseline` and
-    # launchers that execute this file through an absolute path.
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import train_all_levir_baseline as common
+import train_all_levir_baseline as common
 
 
 MODEL_CONFIGS = {
@@ -429,7 +423,6 @@ def run_final_evaluation(
 
 
 def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
-    repo_id = args.hf_repo_id.format(seed=args.seed, model=model_name)
     token = args.hf_token or os.environ.get("HF_TOKEN")
     if not token:
         raise ValueError(
@@ -445,22 +438,22 @@ def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
     work_dir = common.resolve_path(args.work_dir) / model_name
     api = HfApi(token=token)
     api.create_repo(
-        repo_id=repo_id,
+        repo_id=args.hf_repo_id,
         repo_type=args.hf_repo_type,
         private=False,
         exist_ok=True,
     )
-    print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{repo_id}/{model_name}")
+    print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}/{model_name}")
     api.upload_folder(
         folder_path=str(work_dir),
         path_in_repo=model_name,
-        repo_id=repo_id,
+        repo_id=args.hf_repo_id,
         repo_type=args.hf_repo_type,
     )
     (work_dir / "upload_complete.json").write_text(
         json.dumps(
             {
-                "repo_id": repo_id,
+                "repo_id": args.hf_repo_id,
                 "repo_type": args.hf_repo_type,
                 "path_in_repo": model_name,
                 "verified": True,
@@ -494,7 +487,7 @@ def run_job(
                 "epochs": args.epochs,
                 "batch_size": args.batch_size,
                 "amp": args.amp,
-                "hf_repo_id": args.hf_repo_id.format(seed=args.seed, model=model_name),
+                "hf_repo_id": args.hf_repo_id,
                 "hf_repo_type": args.hf_repo_type,
                 "upload_required": True,
             },
@@ -605,11 +598,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Record a failed model and continue with the remaining models.",
     )
-    parser.add_argument(
-        "--hf-repo-id",
-        default="duyle2408/tinyperson_mmdet_runs_seed{seed}",
-        help="Hugging Face dataset ID; {seed} is replaced with the training seed.",
-    )
+    parser.add_argument("--hf-repo-id", default="duyle2408/mmdet_baseline_runs")
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument(
         "--hf-token",
@@ -629,12 +618,6 @@ def main() -> None:
         raise ValueError("--num-machines must be >= 1")
     if not 0 <= args.machine_index < args.num_machines:
         raise ValueError("--machine-index must be in [0, num_machines)")
-    args.data_root = str(
-        common.resolve_dataset_root(
-            args.data_root,
-            env_names=("TINYPERSON_DATA_ROOT", "MARIMO_TINYPERSON_ROOT"),
-        )
-    )
     models = common.comma_list(args.models)
     unknown = sorted(set(models) - set(MODEL_CONFIGS))
     if unknown:
