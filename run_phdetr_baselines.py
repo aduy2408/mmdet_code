@@ -239,7 +239,12 @@ def run_command(command: list[str], cwd: Path, log_path: Path) -> str:
     return log_path.read_text(encoding="utf-8", errors="replace")
 
 
-def native_train_command(python: str, phdetr_root: Path, config: Path, *extra: str) -> list[str]:
+def native_train_command(
+    python: str,
+    entrypoint: Path,
+    config: Path,
+    *extra: str,
+) -> list[str]:
     """Use one-process torchrun because PH-DETR calls distributed APIs at init."""
     return [
         python,
@@ -247,7 +252,7 @@ def native_train_command(python: str, phdetr_root: Path, config: Path, *extra: s
         "torch.distributed.run",
         "--nproc_per_node=1",
         "--master_port=29511",
-        str(phdetr_root / "train.py"),
+        str(entrypoint),
         "-c",
         str(config),
         *extra,
@@ -309,6 +314,7 @@ def run_one(args: argparse.Namespace) -> Path:
     args.work_root = args.work_root or settings["work_root"]
     args.hf_repo_id = args.hf_repo_id or settings["hf_repo"]
     phdetr_root = resolve(args.phdetr_root)
+    entrypoint = repo_root() / "phdetr_compat_entry.py"
     ensure_phdetr_root(phdetr_root)
     dataset = prepare_dataset(args, settings)
     work_dir = resolve(args.work_root) / f"seed{args.seed}"
@@ -328,7 +334,7 @@ def run_one(args: argparse.Namespace) -> Path:
         "baseline": "train_all baseline split and resize protocol",
         "variant": "standalone PH-DETR native runner",
         "source_commit": PHDETR_COMMIT,
-        "runner": "PH-DETR/train.py",
+        "runner": "phdetr_compat_entry.py -> PH-DETR/train.py",
         "python_executable": args.python,
         "dataset_root": str(resolve(args.data_root)),
         "split_seed": args.split_seed,
@@ -357,7 +363,7 @@ def run_one(args: argparse.Namespace) -> Path:
     train_log = run_command(
         native_train_command(
             args.python,
-            phdetr_root,
+            entrypoint,
             train_config,
             "--use-amp",
             "--seed",
@@ -374,7 +380,7 @@ def run_one(args: argparse.Namespace) -> Path:
     test_log = run_command(
         native_train_command(
             args.python,
-            phdetr_root,
+            entrypoint,
             test_config,
             "-r",
             str(checkpoint),
