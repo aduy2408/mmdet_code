@@ -91,13 +91,11 @@ To run the transformer baselines directly, use one launcher per dataset:
   --models detr,dino --epochs 12 --amp
 
 /marimo/mmdet-venv/bin/python /marimo/mmdet_code/train_all_levir_baseline.py \
-  --models detr,dino --epochs 12 --amp \
-  --hf-repo-id duyle2408/mmdet_baseline_runs
+  --models detr,dino --epochs 12 --amp --no-hf-upload
 ```
 
 Run the same commands with `--dry-run` first to prepare and inspect the patched
-configs. Upload is mandatory for this workflow and is verified after each
-completed model. DINO uses the four-scale R50 config and is substantially more
+configs. DINO uses the four-scale R50 config and is substantially more
 memory-intensive than DETR, so reduce `--batch-size` if CUDA memory is limited.
 
 ## Dataset protocol

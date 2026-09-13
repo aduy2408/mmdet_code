@@ -586,19 +586,16 @@ def write_job_summary(
 
 
 def upload_work_dir_to_hf(args: argparse.Namespace) -> None:
+    if args.no_hf_upload:
+        return
     token = args.hf_token or os.environ.get("HF_TOKEN")
     if not token:
-        raise ValueError(
-            "Hugging Face upload is mandatory for this workflow. "
-            "Provide --hf-token or HF_TOKEN in the Marimo launch environment."
-        )
+        raise ValueError("Hugging Face upload requires --hf-token or HF_TOKEN; pass --no-hf-upload to skip.")
 
     try:
         from huggingface_hub import HfApi
     except ImportError as exc:
-        raise ImportError(
-            "Hugging Face upload requires `huggingface_hub`; install it before training."
-        ) from exc
+        raise ImportError("Hugging Face upload requires `huggingface_hub`; install it or pass --no-hf-upload.") from exc
 
     api = HfApi(token=token)
     api.create_repo(repo_id=args.hf_repo_id, repo_type=args.hf_repo_type, private=False, exist_ok=True)
@@ -608,18 +605,6 @@ def upload_work_dir_to_hf(args: argparse.Namespace) -> None:
         folder_path=str(work_dir),
         repo_id=args.hf_repo_id,
         repo_type=args.hf_repo_type,
-    )
-    (work_dir / "upload_complete.json").write_text(
-        json.dumps(
-            {
-                "repo_id": args.hf_repo_id,
-                "repo_type": args.hf_repo_type,
-                "verified": True,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
     )
 
 
@@ -724,6 +709,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hf-repo-id", default="duyle2408/varroa_mmdet_runs")
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument("--hf-token", default="", help="Hugging Face token. Defaults to HF_TOKEN from the environment.")
+    parser.add_argument("--no-hf-upload", action="store_true", help="Skip uploading each completed job to Hugging Face.")
     parser.add_argument("--test-only", action="store_true", help="Skip training and run final test/upload for existing job work dirs.")
     parser.add_argument(
         "--test-checkpoint",

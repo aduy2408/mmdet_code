@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import random
 import subprocess
 import sys
@@ -422,80 +421,11 @@ def run_final_evaluation(
     return json.loads(output.read_text(encoding="utf-8"))
 
 
-def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
-    token = args.hf_token or os.environ.get("HF_TOKEN")
-    if not token:
-        raise ValueError(
-            "Hugging Face upload is mandatory for this workflow. "
-            "Provide --hf-token or HF_TOKEN in the Marimo launch environment."
-        )
-    try:
-        from huggingface_hub import HfApi
-    except ImportError as exc:
-        raise ImportError(
-            "Hugging Face upload requires `huggingface_hub`; install it before training."
-        ) from exc
-    work_dir = common.resolve_path(args.work_dir) / model_name
-    api = HfApi(token=token)
-    api.create_repo(
-        repo_id=args.hf_repo_id,
-        repo_type=args.hf_repo_type,
-        private=False,
-        exist_ok=True,
-    )
-    print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}/{model_name}")
-    api.upload_folder(
-        folder_path=str(work_dir),
-        path_in_repo=model_name,
-        repo_id=args.hf_repo_id,
-        repo_type=args.hf_repo_type,
-    )
-    (work_dir / "upload_complete.json").write_text(
-        json.dumps(
-            {
-                "repo_id": args.hf_repo_id,
-                "repo_type": args.hf_repo_type,
-                "path_in_repo": model_name,
-                "verified": True,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-
 def run_job(
     model_name: str, config_paths: dict[str, Path], args: argparse.Namespace
 ) -> None:
     config = config_paths["train"]
     work_dir = common.resolve_path(args.work_dir) / model_name
-    (work_dir / "experiment_manifest.json").write_text(
-        json.dumps(
-            {
-                "experiment_type": "baseline",
-                "dataset": "TinyPerson",
-                "model": model_name,
-                "canonical_config": MODEL_CONFIGS[model_name],
-                "patched_config": str(config),
-                "source_commit": subprocess.check_output(
-                    ["git", "rev-parse", "HEAD"], cwd=common.repo_root(), text=True
-                ).strip(),
-                "data_root": str(common.resolve_path(args.data_root)),
-                "split_seed": args.split_seed,
-                "training_seed": args.seed,
-                "epochs": args.epochs,
-                "batch_size": args.batch_size,
-                "amp": args.amp,
-                "hf_repo_id": args.hf_repo_id,
-                "hf_repo_type": args.hf_repo_type,
-                "upload_required": True,
-            },
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
     if not args.test_only:
         command = [
             args.python,
@@ -511,7 +441,6 @@ def run_job(
             command.append("--resume")
         common.run(command)
     if args.skip_test:
-        upload_work_dir_to_hf(model_name, args)
         return
     checkpoint = common.find_checkpoint(work_dir)
     for split in ("validation", "test"):
@@ -545,7 +474,6 @@ def run_job(
         output = work_dir / "final_results.json"
         output.write_text(json.dumps(final, indent=2) + "\n", encoding="utf-8")
         print(f"FINAL RESULTS {output}")
-    upload_work_dir_to_hf(model_name, args)
 
 
 def parse_args() -> argparse.Namespace:
@@ -597,13 +525,6 @@ def parse_args() -> argparse.Namespace:
         "--continue-on-error",
         action="store_true",
         help="Record a failed model and continue with the remaining models.",
-    )
-    parser.add_argument("--hf-repo-id", default="duyle2408/mmdet_baseline_runs")
-    parser.add_argument("--hf-repo-type", default="dataset")
-    parser.add_argument(
-        "--hf-token",
-        default="",
-        help="Defaults to HF_TOKEN from the Marimo launch environment.",
     )
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument("--machine-index", type=int, default=0)
