@@ -49,6 +49,49 @@ def resolve_path(value: str | Path) -> Path:
     return path.resolve() if path.is_absolute() else (repo_root() / path).resolve()
 
 
+def resolve_dataset_root(value: str | Path, *, env_names: tuple[str, ...] = ()) -> Path:
+    """Resolve a dataset from the checkout or standard Marimo mount points."""
+    raw = Path(value).expanduser()
+    candidates: list[Path] = []
+    if raw.is_absolute():
+        candidates.append(raw)
+    else:
+        candidates.extend((repo_root() / raw, Path.cwd() / raw))
+    for name in env_names:
+        configured = os.environ.get(name)
+        if configured:
+            candidates.insert(0, Path(configured).expanduser())
+    name = raw.name
+    if name == "LevirShipData":
+        candidates.extend(
+            Path(path) / "LevirShipData"
+            for path in ("/marimo", "/marimo/mmdet_code", "/data", "/mnt/data")
+        )
+    elif name == "tiny_set":
+        candidates.extend(
+            Path(path)
+            for path in (
+                "/marimo/TinyPerson/tiny_set",
+                "/marimo/mmdet_code/../TinyPerson/tiny_set",
+                "/data/TinyPerson/tiny_set",
+                "/mnt/data/TinyPerson/tiny_set",
+            )
+        )
+    seen: set[Path] = set()
+    checked: list[str] = []
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        checked.append(str(candidate))
+        if candidate.is_dir():
+            return candidate
+    raise FileNotFoundError(
+        f"Dataset root not found for {value}. Checked:\n" + "\n".join(f"- {path}" for path in checked)
+    )
+
+
 def comma_list(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
@@ -455,6 +498,7 @@ def run(command: list[str]) -> None:
 
 
 def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
+    repo_id = args.hf_repo_id.format(seed=args.seed, model=model_name)
     token = args.hf_token or os.environ.get("HF_TOKEN")
     if not token:
         raise ValueError(
@@ -472,23 +516,23 @@ def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
     work_dir = resolve_path(args.work_dir) / model_name
     api = HfApi(token=token)
     api.create_repo(
-        repo_id=args.hf_repo_id,
+        repo_id=repo_id,
         repo_type=args.hf_repo_type,
         private=False,
         exist_ok=True,
     )
-    print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}/{model_name}")
+    print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{repo_id}/{model_name}")
     api.upload_folder(
         folder_path=str(work_dir),
         path_in_repo=model_name,
-        repo_id=args.hf_repo_id,
+        repo_id=repo_id,
         repo_type=args.hf_repo_type,
     )
     marker = work_dir / "upload_complete.json"
     marker.write_text(
         json.dumps(
             {
-                "repo_id": args.hf_repo_id,
+                "repo_id": repo_id,
                 "repo_type": args.hf_repo_type,
                 "path_in_repo": model_name,
                 "verified": True,
@@ -525,7 +569,7 @@ def run_job(
                 "epochs": args.epochs,
                 "batch_size": args.batch_size,
                 "amp": args.amp,
-                "hf_repo_id": args.hf_repo_id,
+                "hf_repo_id": args.hf_repo_id.format(seed=args.seed, model=model_name),
                 "hf_repo_type": args.hf_repo_type,
                 "upload_required": True,
             },
@@ -652,7 +696,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument("--machine-index", type=int, default=0)
-    parser.add_argument("--hf-repo-id", default="duyle2408/levir_ship_mmdet_runs")
+    parser.add_argument("--hf-repo-id", required=True)
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument(
         "--hf-token",
@@ -668,6 +712,12 @@ def main() -> None:
         raise ValueError("--num-machines must be >= 1")
     if not 0 <= args.machine_index < args.num_machines:
         raise ValueError("--machine-index must be in [0, num_machines)")
+    args.data_root = str(
+        resolve_dataset_root(
+            args.data_root,
+            env_names=("LEVIR_SHIP_DATA_ROOT", "MARIMO_LEVIR_ROOT"),
+        )
+    )
     models = comma_list(args.models)
     unknown = sorted(set(models) - set(MODEL_CONFIGS))
     if unknown:

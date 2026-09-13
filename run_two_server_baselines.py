@@ -40,7 +40,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tinyperson-batch-size", type=int, default=2)
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--amp", action="store_true")
-    parser.add_argument("--hf-repo-id", default="duyle2408/mmdet_baseline_runs")
+    parser.add_argument(
+        "--levir-hf-repo-template",
+        default="",
+        help="Hugging Face dataset ID template, e.g. namespace/levir_mmdet_runs_seed{seed}.",
+    )
+    parser.add_argument(
+        "--tinyperson-hf-repo-template",
+        default="duyle2408/tinyperson_mmdet_runs_seed{seed}",
+        help="Hugging Face dataset ID template for TinyPerson.",
+    )
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -57,6 +66,11 @@ def main() -> None:
     print(f"Machine {args.machine} jobs: {jobs}")
     if args.list:
         return
+    if not args.levir_hf_repo_template:
+        raise ValueError(
+            "--levir-hf-repo-template is required for real runs so LEVIR uploads "
+            "cannot silently target the wrong dataset."
+        )
     if args.install:
         subprocess.run(["bash", args.install_script], check=True)
     if not python.is_file():
@@ -78,6 +92,7 @@ def main() -> None:
                 f"{dataset}_baseline_split{args.split_seed}_seed{seed}"
             )
             if dataset == "levir":
+                hf_repo_id = args.levir_hf_repo_template.format(seed=seed)
                 command = [
                     str(python),
                     str(code_root / "train_all_levir_baseline.py"),
@@ -88,12 +103,13 @@ def main() -> None:
                     "--batch-size", str(args.levir_batch_size),
                     "--num-workers", str(args.num_workers),
                     "--python", str(python),
-                    "--hf-repo-id", args.hf_repo_id,
+                    "--hf-repo-id", hf_repo_id,
                     "--hf-repo-type", args.hf_repo_type,
                 ]
                 if args.smoke_test:
                     command += ["--limit", "16"]
             else:
+                hf_repo_id = args.tinyperson_hf_repo_template.format(seed=seed)
                 command = [
                     str(python),
                     str(code_root / "train_all_tinyperson_baseline.py"),
@@ -104,7 +120,7 @@ def main() -> None:
                     "--batch-size", str(args.tinyperson_batch_size),
                     "--num-workers", str(args.num_workers),
                     "--python", str(python),
-                    "--hf-repo-id", args.hf_repo_id,
+                    "--hf-repo-id", hf_repo_id,
                     "--hf-repo-type", args.hf_repo_type,
                 ]
                 if args.smoke_test:

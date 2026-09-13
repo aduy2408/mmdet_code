@@ -65,6 +65,8 @@ subprocess.run([
     "/marimo/mmdet_code/run_two_server_baselines.py",
     "--machine", "1",
     "--epochs", "12",
+    "--levir-hf-repo-template", "<namespace>/levir_mmdet_runs_seed{seed}",
+    "--tinyperson-hf-repo-template", "duyle2408/tinyperson_mmdet_runs_seed{seed}",
     "--amp",
 ], check=True)
 ```
@@ -77,6 +79,8 @@ subprocess.run([
     "/marimo/mmdet_code/run_two_server_baselines.py",
     "--machine", "2",
     "--epochs", "12",
+    "--levir-hf-repo-template", "<namespace>/levir_mmdet_runs_seed{seed}",
+    "--tinyperson-hf-repo-template", "duyle2408/tinyperson_mmdet_runs_seed{seed}",
     "--amp",
 ], check=True)
 ```
@@ -88,11 +92,12 @@ To run the transformer baselines directly, use one launcher per dataset:
 
 ```bash
 /marimo/mmdet-venv/bin/python /marimo/mmdet_code/train_all_tinyperson_baseline.py \
-  --models detr,dino --epochs 12 --amp
+  --models detr,dino --epochs 12 --amp \
+  --hf-repo-id duyle2408/tinyperson_mmdet_runs_seed{seed}
 
 /marimo/mmdet-venv/bin/python /marimo/mmdet_code/train_all_levir_baseline.py \
   --models detr,dino --epochs 12 --amp \
-  --hf-repo-id duyle2408/mmdet_baseline_runs
+  --hf-repo-id <namespace>/levir_mmdet_runs_seed{seed}
 ```
 
 Run the same commands with `--dry-run` first to prepare and inspect the patched
