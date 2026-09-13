@@ -153,7 +153,10 @@ def make_config(
             str(phdetr_root / "configs/include/dfine_hgnetv2.yml"),
         ],
         "output_dir": str(work_dir),
-        "num_classes": 1,
+        # PH-DETR keeps raw COCO category IDs as labels.  The baseline
+        # annotations use category_id=1 for the single foreground class, so
+        # reserve class 0 and expose two logits to avoid an out-of-range label.
+        "num_classes": 2,
         "eval_spatial_size": [image_size, image_size],
         "epoches": args.epochs,
         "checkpoint_freq": 1,
@@ -339,7 +342,7 @@ def run_one(args: argparse.Namespace) -> Path:
         "dataset_root": str(resolve(args.data_root)),
         "split_seed": args.split_seed,
         "training_seed": args.seed,
-        "model_backbone_pretrained": "PH-DETR DFINE with HGNetv2-B2 pretrained=True",
+        "model_backbone_pretrained": "PH-DETR DFINE with HGNetv2-B2 pretrained=True; num_classes=2 for 1-based COCO labels",
         "image_size": args.image_size or settings["image_size"],
         "batch_size": args.batch_size or settings["batch_size"],
         "epochs": args.epochs,
