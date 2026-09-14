@@ -14,7 +14,10 @@ else
 fi
 SET_DIR="${SET_DIR:-$DEFAULT_SET_DIR}"
 VENV_DIR="${VENV_DIR:-/marimo/mmdet2-venv}"
-PYTHON_VERSION="${PYTHON_VERSION:-3.10}"
+# Do not honor the generic PYTHON_VERSION from a Marimo kernel. Those sessions
+# commonly export 3.13, which has no Torch 1.12 wheel. Override deliberately
+# with SET_PYTHON_VERSION when needed.
+PYTHON_VERSION="${SET_PYTHON_VERSION:-3.10}"
 MAX_JOBS="${MAX_JOBS:-4}"
 INSTALL_CUDA_TOOLKIT="${INSTALL_CUDA_TOOLKIT:-0}"
 MMCV_VERSION="${MMCV_VERSION:-1.6.0}"
@@ -43,6 +46,11 @@ printf 'SET_DIR=%s\nVENV_DIR=%s\nPYTHON_VERSION=%s\nMAX_JOBS=%s\n' \
 uv venv "$VENV_DIR" --python "$PYTHON_VERSION" --seed
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"
+
+case "$(python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')" in
+    3.9|3.10) ;;
+    *) echo "SET requires Python 3.9 or 3.10, got $(python --version)" >&2; exit 1 ;;
+esac
 
 python -m pip install --upgrade 'pip<25' 'setuptools==65.5.0' 'wheel<1'
 
