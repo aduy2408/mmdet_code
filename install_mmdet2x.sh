@@ -92,9 +92,10 @@ python -m pip install \
     "mmcv-full==$MMCV_VERSION" \
     -f "https://download.openmmlab.com/mmcv/dist/cu113/torch1.12/index.html"
 
-# Keep old Torch and MMCV compatible with NumPy 1.x. These are the runtime
-# dependencies imported by SET's model and data paths.
-python -m pip install \
+# Keep old Torch and MMCV compatible with NumPy 1.x. Install SET's legacy
+# packages without dependency resolution so timm/kornia cannot replace Torch
+# 1.12 with a current Torch 2.x wheel.
+python -m pip install --no-deps \
     "numpy==$NUMPY_VERSION" \
     "opencv-python==$OPENCV_VERSION" \
     'matplotlib<4' \
@@ -102,9 +103,12 @@ python -m pip install \
     'six' \
     'terminaltables' \
     'timm==0.6.13' \
-    'albumentations==1.3.1' \
-    'kornia' \
-    'huggingface_hub'
+    'kornia'
+
+
+# Albumentations is optional in SET's pipeline and is not needed by the
+# default FCOS configs. Keep upload support separate from Torch resolution.
+python -m pip install 'huggingface_hub'
 
 # SET has no native extension of its own. Install it without dependency
 # resolution so pip cannot replace the pinned Torch/MMCV stack.
