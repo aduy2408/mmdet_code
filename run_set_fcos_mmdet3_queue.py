@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import argparse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -37,8 +38,15 @@ def write_manifest(name: str, root: str, variant: str = "base") -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--datasets", default="varroa,levir_ship,tinyperson",
+        help="Comma-separated dataset stages to run.")
+    selected = {item.strip() for item in parser.parse_args().datasets.split(',')}
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join([str(ROOT / "mmdetection"), env.get("PYTHONPATH", "")])
+    env["PYTHONPATH"] = os.pathsep.join([
+        str(ROOT), str(ROOT / "mmdetection"), env.get("PYTHONPATH", "")
+    ])
     env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
     commands = [
         ("varroa", "/marimo/Varroa", [
@@ -70,6 +78,8 @@ def main() -> None:
         ]),
     ]
     for name, dataset_root, command in commands:
+        if name not in selected:
+            continue
         write_manifest(name, dataset_root)
         print("RUN", " ".join(command), flush=True)
         subprocess.run(command, cwd=str(ROOT), env=env, check=True)
