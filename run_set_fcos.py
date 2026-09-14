@@ -120,9 +120,15 @@ def main() -> None:
     for dataset in datasets:
         if dataset not in CONFIGS:
             raise ValueError(f"unknown dataset: {dataset}")
-        if dataset == "tinyperson":
+        if dataset == "tinyperson" and not (
+            Path(env.get("SET_TINYPERSON_PREPARED_ROOT", SET_ROOT / "data/tinyperson_seed42"))
+            / "annotations/train_corner.json"
+        ).is_file():
             run([SET_PYTHON, str(SET_ROOT / "tools/prepare_tinyperson.py"), "--seed", str(a.split_seed)], cwd=SET_ROOT, env=env)
-        elif dataset == "levir_ship":
+        elif dataset == "levir_ship" and not (
+            Path(env.get("SET_LEVIR_ROOT", SET_ROOT / "data/levir_ship"))
+            / "annotations/train.json"
+        ).is_file():
             run([SET_PYTHON, str(SET_ROOT / "tools/prepare_levir_ship.py")], cwd=SET_ROOT, env=env)
         work = work_root / dataset / f"seed{a.seed}"
         work.mkdir(parents=True, exist_ok=True)
@@ -133,7 +139,7 @@ def main() -> None:
             "source_commit": subprocess.check_output(["git", "-C", str(SET_ROOT), "rev-parse", "HEAD"], text=True).strip(),
             "runner": str(ROOT / "run_set_fcos.py"),
             "python_executable": SET_PYTHON,
-            "dataset_root": str((SET_ROOT / "data" / ("levir_ship" if dataset == "levir_ship" else "tinyperson_seed42" if dataset == "tinyperson" else "../mmdetection/mmdetection/data/varroa_coco")).resolve()),
+            "dataset_root": str(DATA_ROOTS.get(dataset, Path(env.get("SET_TINYPERSON_PREPARED_ROOT", SET_ROOT / "data/tinyperson_seed42"))).resolve()),
             "split_seed": a.split_seed,
             "training_seed": a.seed,
             "model/backbone/pretrained source": "FCOS_set / ResNet-50 / torchvision://resnet50",
@@ -153,8 +159,8 @@ def main() -> None:
             write_split_config(config, split_config, split)
             detection = result_json(split_config, ckpt, work / f"{split}_results", env)
             if dataset == "tinyperson":
-                prepared = SET_ROOT / "data/tinyperson_seed42"
-                source = SET_ROOT.parent / "TinyPerson/tiny_set"
+                prepared = Path(env.get("SET_TINYPERSON_PREPARED_ROOT", SET_ROOT / "data/tinyperson_seed42"))
+                source = Path(env.get("SET_TINYPERSON_ROOT", SET_ROOT.parent / "TinyPerson/tiny_set"))
                 merged_gt = work / f"{split}_merged_gt.json"
                 if split == "val":
                     make_tiny_merged_val(prepared, source, merged_gt)
@@ -178,7 +184,7 @@ def main() -> None:
 
 DATA_ROOTS = {
     "varroa": Path(os.environ.get("SET_VARROA_ROOT", SET_ROOT.parent / "mmdetection/mmdetection/data/varroa_coco")).resolve(),
-    "levir_ship": (SET_ROOT / "data/levir_ship").resolve(),
+    "levir_ship": Path(os.environ.get("SET_LEVIR_ROOT", SET_ROOT / "data/levir_ship")).resolve(),
 }
 
 if __name__ == "__main__":
