@@ -98,7 +98,15 @@ python -m pip install \
 python -m pip install --no-deps \
     "numpy==$NUMPY_VERSION" \
     "opencv-python==$OPENCV_VERSION" \
-    'matplotlib<4' \
+    'matplotlib==3.7.5' \
+    'contourpy==1.1.1' \
+    'cycler==0.12.1' \
+    'fonttools==4.53.1' \
+    'kiwisolver==1.4.5' \
+    'packaging==24.1' \
+    'pillow==10.4.0' \
+    'pyparsing==3.1.2' \
+    'python-dateutil==2.9.0.post0' \
     'pycocotools==2.0.6' \
     'six' \
     'terminaltables' \
