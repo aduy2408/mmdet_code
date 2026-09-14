@@ -1,13 +1,13 @@
 # SR-TOD custom-model setup
 
 This directory contains generated, non-canonical configs for the SR-TOD
-`SRTOD_CascadeRCNN` variant. The model uses the paper's reconstruction branch
+`SRTOD_FasterRCNN` variant. The model uses the paper's reconstruction branch
 and difference-guided feature enhancement (DGFE) module. It is the selected
 model for the Varroa, TinyPerson, and LEVIR-Ship rerun.
 
 ## Selected model
 
-- Model: `SRTOD_CascadeRCNN`
+- Model: `SRTOD_FasterRCNN`
 - Backbone: ResNet-50
 - Pretrained source: `torchvision://resnet50`
 - Variant source: `SR-TOD/srtod_project/srtod_cascade_rcnn/config/srtod-cascade-rcnn_r50_fpn_visdrone.py`
@@ -17,9 +17,9 @@ model for the Varroa, TinyPerson, and LEVIR-Ship rerun.
 
 ## Dataset configs
 
-- `varroa_srtod_cascade_r50_fpn.py`
-- `tinyperson_srtod_cascade_r50_fpn.py`
-- `levir_ship_srtod_cascade_r50_fpn.py`
+- `varroa_srtod_faster_r50_fpn.py`
+- `tinyperson_srtod_faster_r50_fpn.py`
+- `levir_ship_srtod_faster_r50_fpn.py`
 - `experiment_manifest.json`
 
 - TinyPerson uses the prepared scene-safe train/validation split and the official
