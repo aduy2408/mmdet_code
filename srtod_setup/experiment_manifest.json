@@ -1,0 +1,73 @@
+{
+  "experiment_id": "srtod_cascade_setup",
+  "control_config_or_baseline_config": "unknown: no SR-TOD baseline manifest was previously recorded",
+  "variant_config_or_explicit_change": "mmdetection/SR-TOD/srtod_project/srtod_cascade_rcnn/config/srtod-cascade-rcnn_r50_fpn_visdrone.py",
+  "source_commit": "495611b237fc07270d5c7d0f5699afd2ae2488c3",
+  "runner": "SR-TOD/MMDetection tools/train.py, deferred to Marimo",
+  "python_executable": "/marimo/mmdet-venv/bin/python (deferred; local .venv-mmdet lacks torch)",
+  "split_seed": 42,
+  "training_seed(s)": "unknown until Marimo run plan",
+  "model/backbone/pretrained source": "SRTOD_CascadeRCNN, ResNet-50, torchvision://resnet50",
+  "image_size, batch_size, epochs, patience, AMP": "config defaults 1333x800, 2, 12, unknown, unknown",
+  "NMS IoU": 0.5,
+  "HF repo and remote prefix": "unknown, no upload requested for setup",
+  "required artifacts": [
+    "generated configs",
+    "dataset manifest"
+  ],
+  "upload_required": false,
+  "datasets": {
+    "varroa": {
+      "dataset": "varroa",
+      "status": "ready",
+      "warnings": [],
+      "config": "/mnt/data/varroa/mmdetection/srtod_setup/varroa_srtod_cascade_r50_fpn.py",
+      "annotations": {
+        "train": "/mnt/data/varroa/mmdetection/mmdetection/data/varroa_coco/annotations/train.json",
+        "val": "/mnt/data/varroa/mmdetection/mmdetection/data/varroa_coco/annotations/val.json",
+        "test": "/mnt/data/varroa/mmdetection/mmdetection/data/varroa_coco/annotations/test.json"
+      },
+      "image_roots": {
+        "train": "/mnt/data/varroa/mmdetection/mmdetection/data/varroa_coco/images/train",
+        "val": "/mnt/data/varroa/mmdetection/mmdetection/data/varroa_coco/images/val",
+        "test": "/mnt/data/varroa/mmdetection/mmdetection/data/varroa_coco/images/test"
+      }
+    },
+    "levir_ship": {
+      "dataset": "levir_ship",
+      "status": "ready",
+      "warnings": [],
+      "config": "/mnt/data/varroa/mmdetection/srtod_setup/levir_ship_srtod_cascade_r50_fpn.py",
+      "annotations": {
+        "train": "/mnt/data/varroa/mmdetection/mmdetection/data/levir_ship_coco_recovered/annotations/train.json",
+        "val": "/mnt/data/varroa/mmdetection/mmdetection/data/levir_ship_coco_recovered/annotations/val.json",
+        "test": "/mnt/data/varroa/mmdetection/mmdetection/data/levir_ship_coco_recovered/annotations/test.json"
+      },
+      "image_roots": {
+        "train": "/mnt/data/varroa/mmdetection/LevirShipData/All Images",
+        "val": "/mnt/data/varroa/mmdetection/LevirShipData/All Images",
+        "test": "/mnt/data/varroa/mmdetection/LevirShipData/All Images"
+      }
+    },
+    "tinyperson": {
+      "dataset": "tinyperson",
+      "status": "ready",
+      "warnings": [
+        "train images are archived and need extraction: /mnt/data/varroa/TinyPerson/tiny_set/erase_with_uncertain_dataset/train.tar.gz",
+        "val images are archived and need extraction: /mnt/data/varroa/TinyPerson/tiny_set/erase_with_uncertain_dataset/train.tar.gz",
+        "test images are archived and need extraction: /mnt/data/varroa/TinyPerson/tiny_set/erase_with_uncertain_dataset/test.tar.gz"
+      ],
+      "config": "/mnt/data/varroa/mmdetection/srtod_setup/tinyperson_srtod_cascade_r50_fpn.py",
+      "annotations": {
+        "train": "/mnt/data/varroa/mmdetection/mmdetection/data/tinyperson_baseline_seed42/train_corner.json",
+        "val": "/mnt/data/varroa/mmdetection/mmdetection/data/tinyperson_baseline_seed42/val_corner.json",
+        "test": "/mnt/data/varroa/mmdetection/mmdetection/data/tinyperson_baseline_seed42/val_merged.json"
+      },
+      "image_roots": {
+        "train": "/mnt/data/varroa/TinyPerson/tiny_set/erase_with_uncertain_dataset/train",
+        "val": "/mnt/data/varroa/TinyPerson/tiny_set/erase_with_uncertain_dataset/train",
+        "test": "/mnt/data/varroa/TinyPerson/tiny_set/erase_with_uncertain_dataset/test"
+      }
+    }
+  }
+}
