@@ -16,7 +16,7 @@ from mmdet.datasets import CocoDataset
 from mmdet.registry import DATASETS, TRANSFORMS
 
 
-@DATASETS.register_module()
+@DATASETS.register_module(force=True)
 class TinyPersonDataset(CocoDataset):
     """COCO dataset that retains TinyBenchmark tile coordinates."""
 
