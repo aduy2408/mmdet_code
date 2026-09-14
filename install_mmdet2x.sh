@@ -108,6 +108,7 @@ python -m pip install --no-deps \
     'pyparsing==3.1.2' \
     'python-dateutil==2.9.0.post0' \
     'pycocotools==2.0.6' \
+    'yapf==0.40.1' \
     'six' \
     'terminaltables' \
     'timm==0.6.13' \
