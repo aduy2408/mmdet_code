@@ -60,6 +60,16 @@ python -m pip install \
     "torchvision==$TORCHVISION_VERSION" \
     --extra-index-url https://download.pytorch.org/whl/cu113
 
+# Some Marimo images reject the executable-stack flag shipped in the Torch 1.12
+# wheel. Clear it before importing torch. This only changes the isolated venv.
+python -m pip install 'patchelf==0.19.1.0'
+TORCH_CPU_LIB=("$VENV_DIR"/lib/python*/site-packages/torch/lib/libtorch_cpu.so)
+if [[ "${#TORCH_CPU_LIB[@]}" -ne 1 ]]; then
+    echo "Could not locate exactly one libtorch_cpu.so in $VENV_DIR" >&2
+    exit 1
+fi
+"$VENV_DIR/bin/patchelf" --clear-execstack "${TORCH_CPU_LIB[0]}"
+
 python - <<'PY'
 import torch
 print('torch:', torch.__version__)
