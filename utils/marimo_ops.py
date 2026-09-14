@@ -37,7 +37,7 @@ def preflight(
     if manifest.get("training_seed") != training_seed:
         raise ValueError("manifest training seed does not match launch intent")
     if manifest.get("upload_required") is not True:
-        raise ValueError("PH-DETR runs must require Hugging Face upload")
+        raise ValueError("training runs must require Hugging Face upload")
     if not (env or os.environ).get("HF_TOKEN"):
         raise RuntimeError("HF_TOKEN is absent from the live Marimo kernel")
 
@@ -71,7 +71,7 @@ def verify_artifacts(run_dir: str | Path, required: Sequence[str]) -> list[str]:
     root = Path(run_dir)
     missing = [name for name in required if not (root / name).exists()]
     if missing:
-        raise FileNotFoundError(f"missing PH-DETR artifacts: {missing}")
+        raise FileNotFoundError(f"missing experiment artifacts: {missing}")
     return [str(root / name) for name in required]
 
 
