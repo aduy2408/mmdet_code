@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import tarfile
 from pathlib import Path
 
 
@@ -46,7 +47,12 @@ DATASETS = {
         "annotations": {
             "train": "train_corner.json",
             "val": "val_corner.json",
-            "test": "val_merged.json",
+            "test": "annotations/task/tiny_set_test_all.json",
+        },
+        "annotation_paths": {
+            "train": "mmdetection/mmdetection/data/tinyperson_baseline_seed42/train_corner.json",
+            "val": "mmdetection/mmdetection/data/tinyperson_baseline_seed42/val_corner.json",
+            "test": "TinyPerson/tiny_set/annotations/task/tiny_set_test_all.json",
         },
         "images": {
             "train": "TinyPerson/tiny_set/erase_with_uncertain_dataset/train",
@@ -77,7 +83,14 @@ def quoted(value: str) -> str:
 def config_text(repo_root: Path, name: str, spec: dict) -> str:
     dataset_root = abs_path(repo_root, spec["root"])
     classes = repr(tuple(spec["classes"]))
-    ann = {split: str((dataset_root / rel).resolve()) for split, rel in spec["annotations"].items()}
+    ann = {
+        split: str(
+            abs_path(repo_root, spec.get("annotation_paths", {}).get(split, rel))
+            if split in spec.get("annotation_paths", {})
+            else (dataset_root / rel).resolve()
+        )
+        for split, rel in spec["annotations"].items()
+    }
     imgs = {split: str(abs_path(repo_root, rel)) for split, rel in spec["images"].items()}
     model_base = str(abs_path(repo_root, MODEL_BASE))
     runtime_base = str(abs_path(repo_root, RUNTIME_BASE))
@@ -188,7 +201,11 @@ def validate_dataset(repo_root: Path, name: str, spec: dict) -> dict:
     if not root.is_dir():
         raise FileNotFoundError(f"{name}: missing dataset root {root}")
     for split, rel in spec["annotations"].items():
-        ann = root / rel
+        ann = (
+            abs_path(repo_root, spec["annotation_paths"][split])
+            if split in spec.get("annotation_paths", {})
+            else root / rel
+        )
         if not ann.is_file():
             raise FileNotFoundError(f"{name}: missing annotation {ann}")
         payload = json.loads(ann.read_text())
@@ -199,9 +216,37 @@ def validate_dataset(repo_root: Path, name: str, spec: dict) -> dict:
         if not image_root.is_dir():
             archive = abs_path(repo_root, spec.get("archives", {}).get("train" if split != "test" else "test", ""))
             if archive.is_file():
+                ann_path = (
+                    abs_path(repo_root, spec["annotation_paths"][split])
+                    if split in spec.get("annotation_paths", {})
+                    else root / spec["annotations"][split]
+                )
+                refs = [item["file_name"] for item in json.loads(ann_path.read_text())["images"]]
+                with tarfile.open(archive) as handle:
+                    members = {member.name for member in handle.getmembers() if member.isfile()}
+                archive_prefix = "train/" if split != "test" else "test/"
+                missing = [ref for ref in refs if archive_prefix + ref not in members]
+                if missing:
+                    raise FileNotFoundError(
+                        f"{name}: {len(missing)} annotation images missing from {archive}; "
+                        f"first: {missing[0]}"
+                    )
                 result["warnings"].append(f"{split} images are archived and need extraction: {archive}")
             else:
                 result["warnings"].append(f"{split} image root is not present yet: {image_root}")
+        else:
+            ann_path = (
+                abs_path(repo_root, spec["annotation_paths"][split])
+                if split in spec.get("annotation_paths", {})
+                else root / spec["annotations"][split]
+            )
+            refs = [item["file_name"] for item in json.loads(ann_path.read_text())["images"]]
+            missing = [ref for ref in refs if not (image_root / ref).is_file()]
+            if missing:
+                raise FileNotFoundError(
+                    f"{name}: {len(missing)} annotation images missing from {image_root}; "
+                    f"first: {missing[0]}"
+                )
     return result
 
 
@@ -241,7 +286,14 @@ def main() -> None:
         config_path = output_dir / f'{name}_srtod_cascade_r50_fpn.py'
         config_path.write_text(config_text(repo_root, name, spec), encoding='utf-8')
         validation['config'] = str(config_path)
-        validation['annotations'] = {split: str((abs_path(repo_root, spec['root']) / rel).resolve()) for split, rel in spec['annotations'].items()}
+        validation['annotations'] = {
+            split: str(
+                abs_path(repo_root, spec['annotation_paths'][split])
+                if split in spec.get('annotation_paths', {})
+                else (abs_path(repo_root, spec['root']) / rel).resolve()
+            )
+            for split, rel in spec['annotations'].items()
+        }
         validation['image_roots'] = {split: str(abs_path(repo_root, rel)) for split, rel in spec['images'].items()}
         manifest['datasets'][name] = validation
     manifest_path = output_dir / 'experiment_manifest.json'

@@ -80,7 +80,7 @@ test_dataloader = dict(
     sampler=dict(type='DefaultSampler', shuffle=False),
     dataset=dict(
         type=dataset_type,
-        ann_file='/mnt/data/varroa/mmdetection/mmdetection/data/tinyperson_baseline_seed42/val_merged.json',
+        ann_file='/mnt/data/varroa/TinyPerson/tiny_set/annotations/task/tiny_set_test_all.json',
         data_prefix=dict(img='/mnt/data/varroa/TinyPerson/tiny_set/erase_with_uncertain_dataset/test/'),
         metainfo=dict(classes=classes),
         test_mode=True,
@@ -88,7 +88,7 @@ test_dataloader = dict(
     ),
 )
 val_evaluator = dict(type='CocoMetric', ann_file='/mnt/data/varroa/mmdetection/mmdetection/data/tinyperson_baseline_seed42/val_corner.json', metric='bbox')
-test_evaluator = dict(type='CocoMetric', ann_file='/mnt/data/varroa/mmdetection/mmdetection/data/tinyperson_baseline_seed42/val_merged.json', metric='bbox')
+test_evaluator = dict(type='CocoMetric', ann_file='/mnt/data/varroa/TinyPerson/tiny_set/annotations/task/tiny_set_test_all.json', metric='bbox')
 
 # Conservative setup defaults. Training seeds, epochs, AMP, and upload policy
 # remain explicit Marimo-run parameters rather than hidden config assumptions.

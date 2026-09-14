@@ -61,7 +61,7 @@
       "annotations": {
         "train": "/mnt/data/varroa/mmdetection/mmdetection/data/tinyperson_baseline_seed42/train_corner.json",
         "val": "/mnt/data/varroa/mmdetection/mmdetection/data/tinyperson_baseline_seed42/val_corner.json",
-        "test": "/mnt/data/varroa/mmdetection/mmdetection/data/tinyperson_baseline_seed42/val_merged.json"
+        "test": "/mnt/data/varroa/TinyPerson/tiny_set/annotations/task/tiny_set_test_all.json"
       },
       "image_roots": {
         "train": "/mnt/data/varroa/TinyPerson/tiny_set/erase_with_uncertain_dataset/train",

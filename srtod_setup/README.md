@@ -22,9 +22,13 @@ model for the Varroa, TinyPerson, and LEVIR-Ship rerun.
 - `levir_ship_srtod_cascade_r50_fpn.py`
 - `experiment_manifest.json`
 
-The configs point at the existing COCO annotations and image roots. TinyPerson
-images are still archived in the current checkout. Extract them before the
-Marimo smoke test:
+- TinyPerson uses the prepared scene-safe train/validation split and the official
+  `TinyPerson/tiny_set/annotations/task/tiny_set_test_all.json` test annotations.
+  The generated configs do not mix the training validation annotations with the
+  test image archive.
+
+TinyPerson images are still archived in the current checkout. Extract them before
+the Marimo smoke test:
 
 ```bash
 tar -xzf TinyPerson/tiny_set/erase_with_uncertain_dataset/train.tar.gz \
