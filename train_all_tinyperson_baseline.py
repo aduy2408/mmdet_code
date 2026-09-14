@@ -17,6 +17,7 @@ import train_all_levir_baseline as common
 
 
 MODEL_CONFIGS = {
+    "fcos_set": "configs/set/fcos_r50_set.py",
     "atss": "configs/atss/atss_r50_fpn_1x_coco.py",
     "fcos": "configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py",
     "faster_rcnn": "configs/faster_rcnn/faster-rcnn_r50_fpn_1x_coco.py",
@@ -229,7 +230,7 @@ def patch_config(
         # The stock scale 8 produces 32 px anchors on P2. Scale 2 starts at 8 px.
         cfg.model.rpn_head.anchor_generator.scales = [2]
     cfg.custom_imports = dict(
-        imports=["projects.tinyperson_baselines", "mmdet.engine.hooks"],
+        imports=["projects.tinyperson_baselines", "projects.set", "mmdet.engine.hooks"],
         allow_failed_imports=False,
     )
     cfg.train_dataloader = deepcopy(cfg.train_dataloader)
@@ -474,6 +475,7 @@ def run_job(
         output = work_dir / "final_results.json"
         output.write_text(json.dumps(final, indent=2) + "\n", encoding="utf-8")
         print(f"FINAL RESULTS {output}")
+        common.upload_work_dir_to_hf(model_name, args)
 
 
 def parse_args() -> argparse.Namespace:
@@ -528,6 +530,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument("--machine-index", type=int, default=0)
+    parser.add_argument("--hf-repo-id", default="duyle2408/set_fcos_runs")
+    parser.add_argument("--hf-repo-type", default="dataset")
+    parser.add_argument("--hf-token", default="")
+    parser.set_defaults(no_hf_upload=False)
     return parser.parse_args()
 
 

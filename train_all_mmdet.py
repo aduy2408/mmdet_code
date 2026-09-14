@@ -26,6 +26,7 @@ VARIANTS = ("base", "dgfe_api")
 AMP_DISABLED_MODELS = {"tood"}
 
 MODEL_CONFIGS = {
+    "fcos_set": "configs/set/fcos_r50_set.py",
     "atss": "configs/atss/atss_r50_fpn_1x_coco.py",
     "retinanet": "configs/retinanet/retinanet_r50_fpn_1x_coco.py",
     "faster_rcnn": "configs/faster_rcnn/faster-rcnn_r50_fpn_1x_coco.py",

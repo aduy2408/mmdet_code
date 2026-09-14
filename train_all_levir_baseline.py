@@ -19,6 +19,7 @@ from PIL import Image
 
 
 MODEL_CONFIGS = {
+    "fcos_set": "configs/set/fcos_r50_set.py",
     "atss": "configs/atss/atss_r50_fpn_1x_coco.py",
     "retinanet": "configs/retinanet/retinanet_r50_fpn_1x_coco.py",
     "faster_rcnn": "configs/faster_rcnn/faster-rcnn_r50_fpn_1x_coco.py",
@@ -299,6 +300,10 @@ def patch_dataset(
         dict(type="LoadAnnotations", with_bbox=True),
     ]
     if train:
+        # MultiImageMixDataset only accepts the nested dataset and wrapper
+        # pipeline.  Retaining CocoDataset-only keys such as ann_file causes
+        # construction to fail before training starts.
+        dataset.clear()
         dataset.type = "MultiImageMixDataset"
         dataset.dataset = base
         dataset.pipeline = yolo_pipeline(image_size, train=True)
@@ -391,6 +396,10 @@ def patch_config(
         max_keep_ckpts=1,
         save_last=True,
     )
+    imports = list(cfg.get("custom_imports", {}).get("imports", []))
+    if "projects.set" not in imports:
+        imports.append("projects.set")
+    cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
     cfg.randomness = dict(seed=args.seed)
     return cfg
 
