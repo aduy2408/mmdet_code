@@ -5,7 +5,14 @@ set -euo pipefail
 # This intentionally does not touch the MMDetection 3.x installer or venv.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SET_DIR="${SET_DIR:-"$SCRIPT_DIR/../SET"}"
+if [[ -d "$SCRIPT_DIR/../SET" ]]; then
+    DEFAULT_SET_DIR="$SCRIPT_DIR/../SET"
+elif [[ -d "$SCRIPT_DIR/../../SET" ]]; then
+    DEFAULT_SET_DIR="$SCRIPT_DIR/../../SET"
+else
+    DEFAULT_SET_DIR="/marimo/SET"
+fi
+SET_DIR="${SET_DIR:-$DEFAULT_SET_DIR}"
 VENV_DIR="${VENV_DIR:-/marimo/mmdet2-venv}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.10}"
 MAX_JOBS="${MAX_JOBS:-4}"
