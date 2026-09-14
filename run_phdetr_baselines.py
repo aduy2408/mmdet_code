@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from PIL import Image
 
 import train_all_levir_baseline as levir
 import train_all_tinyperson_baseline as tinyperson
@@ -122,19 +123,63 @@ def prepare_dataset(args: argparse.Namespace, settings: dict[str, Any]) -> dict[
 
     dataset_root = resolve(args.data_root)
     train_images = tinyperson.ensure_erased_train_images(dataset_root, args.dry_run)
+    prepared_root = resolve(args.prepared_dir)
     prepared = tinyperson.prepare_validation_split(
         dataset_root,
-        resolve(args.prepared_dir),
+        prepared_root,
         args.split_seed,
         0.15,
     )
+
+    def materialize_corner_split(
+        annotation_path: Path,
+        source_root: Path,
+        prefix: str,
+    ) -> Path:
+        """Create real tile images for PH-DETR's generic COCO loader.
+
+        TinyPerson's corner JSON stores crop-relative boxes but points
+        ``file_name`` at the original full image and records the crop in a
+        separate ``corner`` field. MMDetection's TinyPerson loader applies
+        that crop; PH-DETR's generic COCO loader does not.
+        """
+        output_annotation = prepared_root / "annotations" / f"{prefix}.json"
+        if args.dry_run:
+            return output_annotation
+        payload = json.loads(annotation_path.read_text(encoding="utf-8"))
+        tile_root = prepared_root / "tiles" / prefix
+        tile_root.mkdir(parents=True, exist_ok=True)
+        for image in payload.get("images", []):
+            source_path = source_root / image["file_name"]
+            if not source_path.is_file():
+                raise FileNotFoundError(f"TinyPerson source image missing: {source_path}")
+            corner = image.get("corner")
+            tile_name = f"{prefix}_{int(image['id']):08d}.jpg"
+            tile_path = tile_root / tile_name
+            with Image.open(source_path) as source_image:
+                if corner:
+                    bounds = tuple(int(round(value)) for value in corner)
+                    tile = source_image.crop(bounds).convert("RGB")
+                else:
+                    tile = source_image.convert("RGB")
+                tile.save(tile_path, quality=95)
+                image["width"], image["height"] = tile.size
+            image["file_name"] = str(Path("tiles") / prefix / tile_name)
+        output_annotation.parent.mkdir(parents=True, exist_ok=True)
+        output_annotation.write_text(json.dumps(payload), encoding="utf-8")
+        return output_annotation
+
+    train_ann = materialize_corner_split(prepared["train"], train_images, "train")
+    val_ann = materialize_corner_split(prepared["val"], train_images, "val")
+    test_source = dataset_root / tinyperson.TEST_ANN
+    test_ann = materialize_corner_split(test_source, dataset_root / "test", "test")
     return {
-        "train_ann": prepared["train"],
-        "val_ann": prepared["val"],
-        "test_ann": dataset_root / tinyperson.TEST_ANN,
-        "train_images": train_images,
-        "val_images": train_images,
-        "test_images": dataset_root / "test",
+        "train_ann": train_ann,
+        "val_ann": val_ann,
+        "test_ann": test_ann,
+        "train_images": prepared_root,
+        "val_images": prepared_root,
+        "test_images": prepared_root,
     }
 
 
