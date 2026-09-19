@@ -13,7 +13,7 @@ Torch:       2.7.0+cu128
 MMDetection: 3.3.0
 MMCV:        mmcv-lite 2.1.0 plus blackwell_compat/sitecustomize.py
 GPU:         NVIDIA RTX PRO 6000 Blackwell, sm_120
-source:      branch set-blackwell-data, commit 7e20ee86 or newer
+source:      branch set-blackwell-data, current published commit
 ```
 
 The legacy SET stack uses Torch 1.12.1 and CUDA 11.3. It fails on this GPU with `no kernel image is available for execution on the device`. Do not launch it on Blackwell.
@@ -52,6 +52,28 @@ upload_required=true
 
 Retrieve `HF_TOKEN` from the live Marimo global namespace. Never print it or put it on a command line. Pass it only in the detached process environment.
 
+## YOLO-matched training protocol
+
+The SET runs must use the same training protocol as the matched YOLO matrix:
+
+```text
+image size: 640 x 640
+epochs:     100
+batch:      8
+workers:    8
+patience:   0 (no early stopping)
+optimizer:  MuSGD, lr=0.01, momentum=0.9, nesterov=true
+weight decay: 0.0005
+AMP:        false
+split seed: 42
+train seed: 42
+```
+
+`MuSGD` is registered in `projects/set/optim/musgd.py` and follows the
+Ultralytics parameter split: 2D/4D weights use the Muon branch, while biases
+and normalization parameters use the SGD branch. Do not silently substitute
+the legacy 12-epoch SGD schedule.
+
 ## Marimo launch pattern
 
 Use `utils.marimo_ops.preflight` and `utils.marimo_ops.launch_detached`. The command must use the exact Python above, must not contain `--no-hf-upload` or `--no-upload`, and must match the manifest. Include the compatibility path in `PYTHONPATH`:
@@ -73,7 +95,7 @@ The full Varroa command is:
   --dataset-out /marimo/mmdet_code/work_dirs/set_fcos_blackwell_full/data/varroa_coco \
   --work-dir /marimo/mmdet_code/work_dirs/set_fcos_blackwell_full/varroa_full \
   --models fcos_set --variants base \
-  --epochs 12 --batch-size 2 --num-workers 4 \
+  --epochs 100 --batch-size 8 --num-workers 8 \
   --img-scale 640 640 --seed 42 \
   --hf-repo-id duyle2408/set_fcos_runs
 ```
@@ -85,7 +107,7 @@ Use the corresponding `train_all_levir_baseline.py` and `train_all_tinyperson_ba
 Do not start the next dataset until all checks pass:
 
 1. Training exited successfully.
-2. Checkpoint exists, normally `best_*.pth` or `epoch_12.pth`.
+2. Checkpoint exists, normally `best_*.pth` or `epoch_100.pth`.
 3. Evaluation output exists, including predictions and final metrics.
 4. The run manifest exists beside the work directory.
 5. The launcher uploaded the work directory to Hugging Face.

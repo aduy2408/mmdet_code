@@ -28,7 +28,7 @@ def write_manifest(name: str, root: str, variant: str = "base") -> None:
         "split_seed": 42,
         "training_seed": 42,
         "model/backbone/pretrained source": "FCOS_set 3.x port / ResNet-50 / torchvision://resnet50",
-        "image_size, batch_size, epochs, patience, AMP": "1333x800 keep_ratio, 2, 12, none, false",
+        "image_size, batch_size, epochs, patience, AMP": "640x640, 8, 100, 0, false",
         "NMS IoU": 0.5,
         "HF repo and remote prefix": f"{HF_REPO}:set_fcos/{name}/seed42",
         "required artifacts": ["manifest.json", "checkpoint", "test results", "upload"],
@@ -55,7 +55,7 @@ def main() -> None:
             "--dataset-out", str(WORK / "data/varroa_coco"),
             "--work-dir", str(WORK / "varroa"),
             "--models", "fcos_set", "--variants", "base",
-            "--epochs", "12", "--batch-size", "2", "--num-workers", "4",
+            "--epochs", "100", "--batch-size", "8", "--num-workers", "8",
             "--hf-repo-id", HF_REPO,
         ]),
         ("levir_ship", "/marimo/LevirShip/LevirShipData", [
@@ -64,7 +64,7 @@ def main() -> None:
             "--dataset-out", str(WORK / "data/levir_ship"),
             "--work-dir", str(WORK / "levir_ship"),
             "--models", "fcos_set",
-            "--epochs", "12", "--batch-size", "2", "--num-workers", "4",
+            "--epochs", "100", "--batch-size", "8", "--num-workers", "8",
             "--hf-repo-id", HF_REPO,
         ]),
         ("tinyperson", "/marimo/TinyPerson", [
@@ -73,7 +73,7 @@ def main() -> None:
             "--prepared-ann-dir", str(WORK / "data/tinyperson_seed42"),
             "--work-dir", str(WORK / "tinyperson"),
             "--models", "fcos_set",
-            "--epochs", "12", "--batch-size", "2", "--num-workers", "4",
+            "--epochs", "100", "--batch-size", "8", "--num-workers", "8",
             "--python", PYTHON, "--hf-repo-id", HF_REPO,
         ]),
     ]

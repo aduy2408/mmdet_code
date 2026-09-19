@@ -38,17 +38,16 @@ model = dict(
         scale=1.0),
 )
 
-# The legacy SET schedule is 12 epochs with steps at 8 and 11.
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=12, val_interval=1)
+# Match the YOLO matrix protocol: 100 epochs, no early stopping.
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=100, val_interval=1)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 param_scheduler = [
     dict(type='ConstantLR', factor=1.0 / 3, by_epoch=False, begin=0, end=500),
-    dict(type='MultiStepLR', begin=0, end=12, by_epoch=True,
-         milestones=[8, 11], gamma=0.1),
+    dict(type='CosineAnnealingLR', T_max=100, by_epoch=True, begin=0, end=100, eta_min=0.0),
 ]
 optim_wrapper = dict(
-    optimizer=dict(type='SGD', lr=0.005, momentum=0.9, weight_decay=0.0001),
+    optimizer=dict(type='MuSGD', lr=0.01, momentum=0.9, nesterov=True, weight_decay=0.0005, muon=0.2, sgd=1.0),
     paramwise_cfg=dict(bias_lr_mult=2., bias_decay_mult=0.),
     clip_grad=dict(max_norm=35, norm_type=2),
 )
