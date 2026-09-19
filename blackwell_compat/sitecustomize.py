@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sys
 import types
+from importlib.machinery import ModuleSpec
 
 import torch
 
@@ -95,5 +96,5 @@ class _Extension(types.ModuleType):
 
 extension = _Extension('mmcv._ext')
 extension.__file__ = 'mmcv/_ext.so'
-extension.__spec__ = None
+extension.__spec__ = ModuleSpec('mmcv._ext', loader=None)
 sys.modules.setdefault('mmcv._ext', extension)
