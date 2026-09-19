@@ -281,7 +281,11 @@ class RPNHead(AnchorHead):
 
         if results.bboxes.numel() > 0:
             bboxes = get_box_tensor(results.bboxes)
-            det_bboxes, keep_idxs = batched_nms(bboxes, results.scores,
+            # MMCV 2.1's batched_nms may return float32 reweighted scores
+            # while the destination buffer follows AMP's float16 scores.
+            # Run NMS in float32 to avoid an index_put dtype mismatch.
+            nms_scores = results.scores.float()
+            det_bboxes, keep_idxs = batched_nms(bboxes, nms_scores,
                                                 results.level_ids, cfg.nms)
             results = results[keep_idxs]
             # some nms would reweight the score, such as softnms
