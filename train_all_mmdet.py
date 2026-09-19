@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import json
 import random
@@ -74,7 +75,12 @@ def ensure_mmdet_imports() -> None:
         sys.path.insert(0, compat)
     # mmcv-lite omits mmcv._ext. Load the committed FCOS compatibility shim
     # explicitly so detached launches do not depend on PYTHONPATH site hooks.
-    import sitecustomize  # noqa: F401
+    shim_path = Path(compat) / "sitecustomize.py"
+    spec = importlib.util.spec_from_file_location("_set_blackwell_compat", shim_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load Blackwell compatibility shim: {shim_path}")
+    shim = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shim)
     if root not in sys.path:
         sys.path.insert(0, root)
 
