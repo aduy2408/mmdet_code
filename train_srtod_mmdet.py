@@ -175,7 +175,7 @@ def prepare_coco_dataset(args: argparse.Namespace) -> Path:
     records = load_records(data_root, args.gt_source)
     records = filter_records(records, only_positives=args.only_positives, class_policy=args.class_policy)
     records = dedupe_records(records)
-    split_records = assign_output_splits(records, args.seed)
+    split_records = assign_output_splits(records, args.split_seed)
 
     ann_dir = out_dir / "annotations"
     ann_dir.mkdir(parents=True, exist_ok=True)
@@ -565,6 +565,8 @@ def write_job_summary(
         "config_path": str(config_path),
         "checkpoint_path": str(checkpoint_path),
         "test_result_dir": str(result_dir),
+        "seed": args.seed,
+        "split_seed": args.split_seed,
         "started_at": started_at,
         "finished_at": utc_now(),
     }
@@ -670,6 +672,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-only", action="store_true", help="Skip training and run final test/upload for existing job work dirs.")
     parser.add_argument("--test-checkpoint", default="", help="Optional checkpoint path/template for --test-only. Supports {model}.")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
