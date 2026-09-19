@@ -1,0 +1,1 @@
+{"images": [{"id": 1, "file_name": "train__2017-09-20_19-24-55__2017-09-20_19-24-55.mp4-bee_id_4718-53280-1.png", "width": 160, "height": 280}], "annotations": [{"id": 1, "image_id": 1, "category_id": 1, "bbox": [29.0, 98.0, 33.0, 31.0], "area": 1023.0, "iscrowd": 0, "segmentation": []}], "categories": [{"id": 1, "name": "varroa"}]}

@@ -1,0 +1,1 @@
+{"images": [{"id": 1, "file_name": "test__2017-10-17_1-39-36__2017-10-17_1-39-36.mp4-bee_id_4077-17295-1.png", "width": 160, "height": 280}], "annotations": [{"id": 1, "image_id": 1, "category_id": 1, "bbox": [36.0, 77.0, 26.0, 31.0], "area": 806.0, "iscrowd": 0, "segmentation": []}], "categories": [{"id": 1, "name": "varroa"}]}
