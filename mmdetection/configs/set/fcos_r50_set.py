@@ -48,6 +48,6 @@ param_scheduler = [
 ]
 optim_wrapper = dict(
     optimizer=dict(type='MuSGD', lr=0.01, momentum=0.9, nesterov=True, weight_decay=0.0005, muon=0.2, sgd=1.0),
-    paramwise_cfg=dict(bias_lr_mult=2., bias_decay_mult=0.),
+    paramwise_cfg=dict(bias_lr_mult=1., bias_decay_mult=0.),
     clip_grad=dict(max_norm=35, norm_type=2),
 )
