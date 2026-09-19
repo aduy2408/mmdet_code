@@ -89,7 +89,8 @@ class _Extension(types.ModuleType):
         if name in ('nms_rotated', 'nms_quadri'):
             return lambda *args, **kwargs: torch.arange(
                 args[0].shape[0], device=args[0].device)
-        raise RuntimeError(f'Optional MMCV op unavailable: {name}')
+        return lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError(f'Optional MMCV op unavailable: {name}'))
 
 
 extension = _Extension('mmcv._ext')
