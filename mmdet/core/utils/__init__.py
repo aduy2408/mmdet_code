@@ -16,3 +16,5 @@ __all__ = [
     'filter_scores_and_topk', 'sync_random_seed',
     'SAM', 'SAM_EpochBasedRunner', 'SAM_Constructor','PSAM'
 ]
+
+from .musgd import MuSGD

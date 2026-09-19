@@ -12,3 +12,5 @@ __all__ = [
     'ExpMomentumEMAHook', 'LinearMomentumEMAHook', 'YOLOXLrUpdaterHook',
     'CheckInvalidLossHook', 'SetEpochInfoHook',
 ]
+
+from .mosaic_close_hook import MosaicCloseHook
