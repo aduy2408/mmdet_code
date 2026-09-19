@@ -103,9 +103,12 @@ class SingleRoIExtractor(BaseRoIExtractor):
             mask = target_lvls == i
             inds = mask.nonzero(as_tuple=False).squeeze(1)
             if inds.numel() > 0:
-                rois_ = rois[inds]
+                # Under AMP, FPN levels can have different dtypes. MMCV's
+                # ROIAlign requires RoIs to match the feature dtype for the
+                # selected level, not only feats[0].
+                rois_ = rois[inds].type_as(feats[i])
                 roi_feats_t = self.roi_layers[i](feats[i], rois_)
-                roi_feats[inds] = roi_feats_t
+                roi_feats[inds] = roi_feats_t.to(roi_feats.dtype)
             else:
                 # Sometimes some pyramid levels will not be used for RoI
                 # feature extraction and this will cause an incomplete
