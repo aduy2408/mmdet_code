@@ -70,7 +70,7 @@ def mmdet_root() -> Path:
 
 def ensure_mmdet_imports() -> None:
     root = str(mmdet_root())
-    compat = str(mmdet_root() / "blackwell_compat")
+    compat = str(repo_root() / "blackwell_compat")
     if compat not in sys.path:
         sys.path.insert(0, compat)
     # mmcv-lite omits mmcv._ext. Load the committed FCOS compatibility shim
