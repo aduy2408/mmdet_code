@@ -287,6 +287,7 @@ def patch_dataset(
     split: str,
     image_size: int,
     train: bool,
+    mosaic: bool = True,
 ) -> None:
     """Patch a dataset and wrap train data for MMDetection's Mosaic support."""
     # Copy plain datasets before assigning them under ``dataset.dataset``.
@@ -308,7 +309,7 @@ def patch_dataset(
         dataset.clear()
         dataset.type = "MultiImageMixDataset"
         dataset.dataset = base
-        dataset.pipeline = yolo_pipeline(image_size, train=True)
+        dataset.pipeline = yolo_pipeline(image_size, train=True, mosaic=mosaic)
     else:
         dataset.pipeline = base.pipeline + yolo_pipeline(image_size, train=False)
 
@@ -320,6 +321,7 @@ def patch_config(
     dataset_out: Path,
     image_dir: Path,
 ) -> Any:
+    use_mosaic = args.variant == "mosaic"
     set_num_classes(cfg.model)
     # MMDetection 3.3.0 requires both keys when tools/train.py receives
     # --auto-scale-lr. Stock DETR/DINO configs only declare base_batch_size.
@@ -329,7 +331,7 @@ def patch_config(
     cfg.val_dataloader = deepcopy(cfg.val_dataloader)
     cfg.test_dataloader = deepcopy(cfg.test_dataloader)
     patch_dataset(
-        cfg.train_dataloader.dataset, dataset_out, image_dir, "train", args.image_size, True
+        cfg.train_dataloader.dataset, dataset_out, image_dir, "train", args.image_size, True, use_mosaic
     )
     patch_dataset(
         cfg.val_dataloader.dataset, dataset_out, image_dir, "val", args.image_size, False
@@ -355,11 +357,12 @@ def patch_config(
         hook for hook in cfg.get("custom_hooks", [])
         if hook.get("type") != "PipelineSwitchHook"
     ]
-    cfg.custom_hooks.append(dict(
-        type="PipelineSwitchHook",
-        switch_epoch=max(0, args.epochs - 10),
-        switch_pipeline=yolo_pipeline(args.image_size, train=True, mosaic=False),
-    ))
+    if use_mosaic:
+        cfg.custom_hooks.append(dict(
+            type="PipelineSwitchHook",
+            switch_epoch=max(0, args.epochs - 10),
+            switch_pipeline=yolo_pipeline(args.image_size, train=True, mosaic=False),
+        ))
     cfg.custom_hooks.append(dict(
         type="EarlyStoppingHook",
         monitor="coco/bbox_mAP",
@@ -622,6 +625,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--variant", choices=("mosaic", "no_mosaic"), default="mosaic")
     parser.add_argument(
         "--image-size",
         type=int,
