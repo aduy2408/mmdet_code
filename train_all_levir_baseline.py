@@ -468,11 +468,9 @@ def find_checkpoint(work_dir: Path) -> Path:
 def run(command: list[str]) -> None:
     print("RUN", " ".join(map(str, command)))
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(
-        value
-        for value in (str(mmdet_root()), env.get("PYTHONPATH", ""))
-        if value
-    )
+    # Do not inherit the live notebook's Python 3.13 path. It can shadow the
+    # Python 3.11 MMDetection venv with an incompatible pycocotools wheel.
+    env["PYTHONPATH"] = str(mmdet_root())
     # MMEngine checkpoints contain HistoryBuffer objects. PyTorch 2.6+ defaults
     # torch.load() to weights_only=True, which rejects these trusted objects.
     env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
