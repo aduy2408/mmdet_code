@@ -139,3 +139,36 @@ Outputs:
 mmdetection/work_dirs/levir_baseline/<model>/final_results.json
 mmdetection/work_dirs/tinyperson_baseline/<model>/final_results.json
 ```
+
+## Varroa YOLO-matched protocol
+
+`train_all_mmdet.py` now supports the Varroa protocol used by
+`yolo_related/train_all_yolo_baselines_no_mosaic.py`. The explicit
+`no_mosaic` variant uses the YOLO-equivalent affine, HSV, flip, resize, pad,
+and filter pipeline, MuSGD, 100 epochs, batch size 8, and 8 workers. The
+`mosaic` variant uses MMDetection's native `MultiImageMixDataset` and
+`Mosaic`, then switches to the no-mosaic pipeline for the final 10 epochs.
+
+```bash
+/marimo/mmdet-venv/bin/python mmdetection/train_all_mmdet.py \
+  --data-root /marimo/Varroa \
+  --models fcos \
+  --variants base \
+  --yolo-protocol no_mosaic \
+  --epochs 100 --early-stop-patience 15 \
+  --batch-size 8 --num-workers 8 --img-scale 640 640 \
+  --split-seed 42 --seed 42 \
+  --python /marimo/mmdet-venv/bin/python \
+  --upload-interval-hours 1
+```
+
+Use `--yolo-protocol mosaic` to enable the corresponding Mosaic variant.
+Run through `utils.marimo_ops` preflight and launch on Marimo. Do not launch
+training directly from the local machine.
+
+For the requested two-server matrix, use
+`mmdetection/run_varroa_yolo_two_server.py`. It assigns the four explicit
+baselines (`fcos`, `faster_rcnn`, `cascade_rcnn`, `rtmdet`) across two servers,
+runs both `no_mosaic` and `mosaic`, and varies training seeds 42 and 43 while
+keeping split seed 42 fixed. Each job uses 640x640, 100 epochs, patience 15,
+batch size 8, 8 workers, MuSGD, and hourly in-progress HF snapshots.

@@ -83,7 +83,11 @@ class _Extension(types.ModuleType):
             return _sigmoid_focal_forward
         if name == 'sigmoid_focal_loss_backward':
             return _sigmoid_focal_backward
-        if name in ('softmax_focal_loss_forward', 'softmax_focal_loss_backward'):
+        if name in (
+            'softmax_focal_loss_forward', 'softmax_focal_loss_backward',
+            'active_rotated_filter_forward', 'active_rotated_filter_backward',
+            'roi_align_forward', 'roi_align_backward',
+        ):
             return lambda *args, **kwargs: None
         if name == 'nms_match':
             return lambda *args, **kwargs: []

@@ -25,27 +25,34 @@ def nms(detections: list[dict], threshold: float) -> list[dict]:
     for detection in detections:
         by_category[detection["category_id"]].append(detection)
     for category_detections in by_category.values():
-        ordered = sorted(
-            category_detections, key=lambda item: item["score"], reverse=True
+        boxes = np.asarray([item["bbox"] for item in category_detections], dtype=float)
+        boxes_xyxy = np.column_stack(
+            (boxes[:, 0], boxes[:, 1], boxes[:, 0] + boxes[:, 2], boxes[:, 1] + boxes[:, 3])
         )
-        while ordered:
-            best = ordered.pop(0)
-            kept.append(best)
-            best_box = xywh_to_xyxy(best["bbox"])
-            best_area = max(0, best_box[2] - best_box[0]) * max(
-                0, best_box[3] - best_box[1]
+        areas = np.maximum(0.0, boxes_xyxy[:, 2] - boxes_xyxy[:, 0]) * np.maximum(
+            0.0, boxes_xyxy[:, 3] - boxes_xyxy[:, 1]
+        )
+        scores = np.asarray([item["score"] for item in category_detections], dtype=float)
+        order = scores.argsort()[::-1]
+        while order.size:
+            best_index = int(order[0])
+            kept.append(category_detections[best_index])
+            if order.size == 1:
+                break
+            remaining = order[1:]
+            xx1 = np.maximum(boxes_xyxy[best_index, 0], boxes_xyxy[remaining, 0])
+            yy1 = np.maximum(boxes_xyxy[best_index, 1], boxes_xyxy[remaining, 1])
+            xx2 = np.minimum(boxes_xyxy[best_index, 2], boxes_xyxy[remaining, 2])
+            yy2 = np.minimum(boxes_xyxy[best_index, 3], boxes_xyxy[remaining, 3])
+            intersection = np.maximum(0.0, xx2 - xx1) * np.maximum(0.0, yy2 - yy1)
+            union = areas[best_index] + areas[remaining] - intersection
+            iou = np.divide(
+                intersection,
+                union,
+                out=np.zeros_like(intersection),
+                where=union > 0,
             )
-            remaining = []
-            for candidate in ordered:
-                box = xywh_to_xyxy(candidate["bbox"])
-                intersection = max(
-                    0, min(best_box[2], box[2]) - max(best_box[0], box[0])
-                ) * max(0, min(best_box[3], box[3]) - max(best_box[1], box[1]))
-                area = max(0, box[2] - box[0]) * max(0, box[3] - box[1])
-                union = best_area + area - intersection
-                if union <= 0 or intersection / union <= threshold:
-                    remaining.append(candidate)
-            ordered = remaining
+            order = remaining[iou <= threshold]
     return kept
 
 
