@@ -10,6 +10,8 @@ import random
 import re
 import subprocess
 import sys
+import threading
+import time
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
@@ -358,6 +360,17 @@ def patch_config(
         switch_epoch=max(0, args.epochs - 10),
         switch_pipeline=yolo_pipeline(args.image_size, train=True, mosaic=False),
     ))
+    cfg.custom_hooks.append(dict(
+        type="EarlyStoppingHook",
+        monitor="coco/bbox_mAP",
+        rule="greater",
+        patience=args.patience,
+        min_delta=0.001,
+    ))
+    cfg.optim_wrapper.optimizer = dict(
+        type="MuSGD", lr=0.01, momentum=0.9, nesterov=True,
+        weight_decay=0.0005, muon=0.2, sgd=1.0,
+    )
     if model_name == "rtmdet":
         milestones = sorted({
             epoch
@@ -489,13 +502,23 @@ def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
         private=False,
         exist_ok=True,
     )
-    print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}/{model_name}")
+    remote = f"{args.remote_prefix}/{model_name}".strip("/")
+    print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}/{remote}")
     api.upload_folder(
         folder_path=str(work_dir),
-        path_in_repo=model_name,
+        path_in_repo=remote,
         repo_id=args.hf_repo_id,
         repo_type=args.hf_repo_type,
     )
+
+
+def periodic_upload(model_name: str, args: argparse.Namespace, stop: threading.Event) -> None:
+    interval = args.upload_interval_hours * 3600
+    while interval > 0 and not stop.wait(interval):
+        try:
+            upload_work_dir_to_hf(model_name, args)
+        except Exception as exc:
+            print(f"PERIODIC UPLOAD FAILED {model_name}: {exc}", flush=True)
 
 
 def run_job(
@@ -519,7 +542,14 @@ def run_job(
             command.append("--amp")
         if args.resume:
             command.append("--resume")
-        run(command)
+        stop = threading.Event()
+        uploader = threading.Thread(target=periodic_upload, args=(model_name, args, stop), daemon=True)
+        uploader.start()
+        try:
+            run(command)
+        finally:
+            stop.set()
+            uploader.join(timeout=30)
     if args.skip_test:
         upload_work_dir_to_hf(model_name, args)
         return
@@ -591,6 +621,7 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument("--patience", type=int, default=15)
     parser.add_argument(
         "--image-size",
         type=int,
@@ -626,6 +657,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--machine-index", type=int, default=0)
     parser.add_argument("--hf-repo-id", default="duyle2408/levir_ship_mmdet_runs")
     parser.add_argument("--hf-repo-type", default="dataset")
+    parser.add_argument("--remote-prefix", default="levirship_mmdet_yolo_protocol")
+    parser.add_argument("--upload-interval-hours", type=float, default=1.0)
     parser.add_argument(
         "--hf-token",
         default="",
