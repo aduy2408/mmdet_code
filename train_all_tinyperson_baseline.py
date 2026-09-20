@@ -9,6 +9,7 @@ import random
 import subprocess
 import sys
 import tarfile
+import threading
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -156,6 +157,7 @@ def dataset_config(
     train: bool,
     limit: int,
     image_size: int = 640,
+    mosaic: bool = True,
 ) -> dict[str, Any]:
     base = dict(
         type="TinyPersonDataset",
@@ -180,7 +182,7 @@ def dataset_config(
     return dict(
         type="MultiImageMixDataset",
         dataset=base,
-        pipeline=common.yolo_pipeline(image_size, train=True),
+        pipeline=common.yolo_pipeline(image_size, train=True, mosaic=mosaic),
     )
 
 
@@ -205,6 +207,7 @@ def patch_config(
     val_ann: Path,
     test_ann: Path,
 ) -> Any:
+    use_mosaic = args.variant == "mosaic"
     common.set_num_classes(cfg.model)
     # MMDetection 3.3.0 requires both keys when tools/train.py receives
     # --auto-scale-lr. Stock DETR/DINO configs only declare base_batch_size.
@@ -237,7 +240,7 @@ def patch_config(
     cfg.val_dataloader = deepcopy(cfg.val_dataloader)
     cfg.test_dataloader = deepcopy(cfg.test_dataloader)
     cfg.train_dataloader.dataset = dataset_config(
-        train_ann, train_images, True, args.limit, args.image_size
+        train_ann, train_images, True, args.limit, args.image_size, use_mosaic
     )
     cfg.test_dataloader.dataset = dataset_config(
         test_ann, test_images, False, args.limit, args.image_size
@@ -261,13 +264,25 @@ def patch_config(
         hook for hook in cfg.get("custom_hooks", [])
         if hook.get("type") != "PipelineSwitchHook"
     ]
+    if use_mosaic:
+        cfg.custom_hooks.append(dict(
+            type="PipelineSwitchHook",
+            switch_epoch=max(0, args.epochs - 10),
+            switch_pipeline=common.yolo_pipeline(
+                args.image_size, train=True, mosaic=False
+            ),
+        ))
     cfg.custom_hooks.append(dict(
-        type="PipelineSwitchHook",
-        switch_epoch=max(0, args.epochs - 10),
-        switch_pipeline=common.yolo_pipeline(
-            args.image_size, train=True, mosaic=False
-        ),
+        type="EarlyStoppingHook",
+        monitor="coco/bbox_mAP",
+        rule="greater",
+        patience=args.patience,
+        min_delta=0.001,
     ))
+    cfg.optim_wrapper.optimizer = dict(
+        type="MuSGD", lr=0.01, momentum=0.9, nesterov=True,
+        weight_decay=0.0005, muon=0.2, sgd=1.0,
+    )
 
     milestones = sorted({
         epoch
@@ -440,7 +455,16 @@ def run_job(
             command.append("--amp")
         if args.resume:
             command.append("--resume")
-        common.run(command)
+        stop = threading.Event()
+        uploader = threading.Thread(
+            target=periodic_upload, args=(model_name, args, stop), daemon=True
+        )
+        uploader.start()
+        try:
+            common.run(command)
+        finally:
+            stop.set()
+            uploader.join(timeout=30)
     if args.skip_test:
         return
     checkpoint = common.find_checkpoint(work_dir)
@@ -475,7 +499,38 @@ def run_job(
         output = work_dir / "final_results.json"
         output.write_text(json.dumps(final, indent=2) + "\n", encoding="utf-8")
         print(f"FINAL RESULTS {output}")
-        common.upload_work_dir_to_hf(model_name, args)
+        upload_work_dir_to_hf(model_name, args)
+
+
+def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
+    token = args.hf_token or os.environ.get("HF_TOKEN")
+    if not token:
+        raise ValueError("TinyPerson upload requires HF_TOKEN")
+    from huggingface_hub import HfApi
+    work_dir = common.resolve_path(args.work_dir) / model_name
+    api = HfApi(token=token)
+    api.create_repo(
+        repo_id=args.hf_repo_id, repo_type=args.hf_repo_type,
+        private=False, exist_ok=True,
+    )
+    remote = f"{args.remote_prefix}/{model_name}".strip("/")
+    print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}/{remote}")
+    api.upload_folder(
+        folder_path=str(work_dir), path_in_repo=remote,
+        repo_id=args.hf_repo_id, repo_type=args.hf_repo_type,
+    )
+    files = api.list_repo_files(repo_id=args.hf_repo_id, repo_type=args.hf_repo_type)
+    if not any(path.startswith(remote + "/") for path in files):
+        raise FileNotFoundError(f"HF remote prefix not found: {remote}")
+
+
+def periodic_upload(model_name: str, args: argparse.Namespace, stop: threading.Event) -> None:
+    interval = args.upload_interval_hours * 3600
+    while interval > 0 and not stop.wait(interval):
+        try:
+            upload_work_dir_to_hf(model_name, args)
+        except Exception as exc:
+            print(f"PERIODIC UPLOAD FAILED {model_name}: {exc}", flush=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -497,12 +552,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--variant", choices=("mosaic", "no_mosaic"), default="mosaic")
     parser.add_argument(
         "--image-size", type=int, default=640,
         help="Square YOLO-style training size used by Mosaic/Resize.",
     )
     parser.add_argument("--batch-size", type=int, default=2)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--num-workers", "--workers", dest="num_workers", type=int, default=4)
+    parser.add_argument("--model-yaml", default="explicit MMDetection registry")
     parser.add_argument(
         "--python",
         default=common.default_python(),
@@ -533,6 +591,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hf-repo-id", default="duyle2408/set_fcos_runs")
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument("--hf-token", default="")
+    parser.add_argument("--remote-prefix", default="tinyperson_mmdet_yolo_protocol")
+    parser.add_argument("--upload-interval-hours", type=float, default=1.0)
     parser.set_defaults(no_hf_upload=False)
     return parser.parse_args()
 
