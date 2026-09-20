@@ -631,7 +631,8 @@ def parse_args() -> argparse.Namespace:
         help="Square resize used by the original baseline launcher.",
     )
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--num-workers", "--workers", dest="num_workers", type=int, default=4)
+    parser.add_argument("--model-yaml", default="explicit MMDetection registry")
     parser.add_argument("--workers", dest="num_workers", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--model-yaml", default="explicit MMDetection registry")
     parser.add_argument(
