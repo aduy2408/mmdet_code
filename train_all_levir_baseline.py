@@ -634,6 +634,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--workers", dest="num_workers", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--model-yaml", default="explicit MMDetection registry")
     parser.add_argument(
         "--python",
         default=default_python(),
