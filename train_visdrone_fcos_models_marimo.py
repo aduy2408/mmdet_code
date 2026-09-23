@@ -122,6 +122,8 @@ def main() -> None:
     patched = run_dir / "patched_config.py"
     config.dump(str(patched))
     from mmengine.runner import Runner
+    from mmengine.utils import import_modules_from_strings
+    import_modules_from_strings(config.custom_imports.get("imports", []), allow_failed_imports=False)
     runner = Runner.from_cfg(config)
     runner.train()
     checkpoint = run_dir / "latest.pth"
