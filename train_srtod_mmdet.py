@@ -574,6 +574,7 @@ def write_job_summary(
     result_dir: Path,
     work_dir: Path,
     started_at: str,
+    args: argparse.Namespace,
 ) -> Path:
     summary_path = work_dir / "job_summary.json"
     summary = {
@@ -641,7 +642,7 @@ def run_job(model_name: str, args: argparse.Namespace, dataset_out: Path) -> Non
     run_trusted_checkpoint_command(command, cwd=srtod_root())
     checkpoint_path = find_trained_checkpoint(work_dir)
     result_dir = run_final_test(config_path, checkpoint_path, work_dir)
-    write_job_summary(model_name, config_path, checkpoint_path, result_dir, work_dir, started_at)
+    write_job_summary(model_name, config_path, checkpoint_path, result_dir, work_dir, started_at, args)
     upload_work_dir_to_hf(args)
 
 
