@@ -406,6 +406,8 @@ def patch_config(cfg: Any, model_name: str, args: argparse.Namespace, dataset_ou
 
 
 def config_path_for(model_name: str, args: argparse.Namespace) -> Path:
+    if args.model_yaml:
+        return resolve_path(args.model_yaml)
     config_path = srtod_root() / MODEL_CONFIGS[model_name]
     if model_name != "fcos":
         return config_path
@@ -659,11 +661,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--machine-index", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--num-workers", "--workers", dest="num_workers", type=int, default=4)
     parser.add_argument("--lr", type=float, default=None, help="Override config optimizer lr; default keeps SR-TOD config.")
     parser.add_argument("--weight-decay", type=float, default=None)
     parser.add_argument("--optimizer", choices=("MuSGD", "SGD"), default="",
                         help="Explicit optimizer override for a variant run.")
+    parser.add_argument("--model-yaml", default="", help="Explicit SR-TOD config path for the variant run.")
     parser.add_argument("--amp", action="store_true")
     parser.add_argument(
         "--keep-pretrained-init",
@@ -679,7 +682,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--soft-nms", action="store_true", help="Use Soft-NMS in validation/test NMS configs.")
     parser.add_argument("--soft-nms-iou-thr", type=float, default=0.5)
     parser.add_argument("--soft-nms-min-score", type=float, default=0.05)
-    parser.add_argument("--early-stop-patience", type=int, default=0)
+    parser.add_argument("--early-stop-patience", "--patience", dest="early_stop_patience", type=int, default=0)
     parser.add_argument("--early-stop-min-delta", type=float, default=0.001)
     parser.add_argument("--hf-repo-id", default="duyle2408/varroa_srtod_runs")
     parser.add_argument("--hf-repo-type", default="dataset")
