@@ -287,6 +287,30 @@ def patch_dataset_cfg(dataset: Any, dataset_out: Path, split: str, class_name: s
     dataset.metainfo = dict(classes=(class_name,))
 
 
+def patch_tinyperson_window_dataset(
+    dataset: Any,
+    *,
+    ann_file: str,
+    image_root: str,
+) -> None:
+    """Use the established TinyPerson corner-window dataset protocol."""
+    if dataset.get("type") == "MultiImageMixDataset" and dataset.get("dataset") is not None:
+        patch_tinyperson_window_dataset(
+            dataset.dataset,
+            ann_file=ann_file,
+            image_root=image_root,
+        )
+        return
+    dataset.type = "TinyPersonDataset"
+    dataset.data_root = ""
+    dataset.ann_file = ann_file
+    dataset.data_prefix = dict(img=image_root.rstrip("/") + "/")
+    dataset.metainfo = dict(classes=("person",))
+    for step in dataset.pipeline:
+        if step.get("type") == "LoadImageFromFile":
+            step["type"] = "LoadTinyPersonImageFromFile"
+
+
 def patch_evaluator(evaluator: Any, dataset_out: Path, split: str) -> None:
     evaluator.type = "CocoMetric"
     evaluator.ann_file = str(dataset_out / "annotations" / f"{split}.json")
@@ -344,6 +368,26 @@ def patch_config(cfg: Any, model_name: str, args: argparse.Namespace, dataset_ou
     patch_dataset_cfg(cfg.train_dataloader.dataset, dataset_out, "train", args.class_name, args.train_image_root)
     patch_dataset_cfg(cfg.val_dataloader.dataset, dataset_out, "val", args.class_name, args.val_image_root)
     patch_dataset_cfg(cfg.test_dataloader.dataset, dataset_out, "test", args.class_name, args.test_image_root)
+    if args.tinyperson_window_protocol:
+        imports = list(cfg.get("custom_imports", {}).get("imports", []))
+        if "projects.tinyperson_baselines" not in imports:
+            imports.append("projects.tinyperson_baselines")
+        cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
+        patch_tinyperson_window_dataset(
+            cfg.train_dataloader.dataset,
+            ann_file=args.window_train_ann,
+            image_root=args.train_image_root,
+        )
+        patch_tinyperson_window_dataset(
+            cfg.val_dataloader.dataset,
+            ann_file=args.window_val_ann,
+            image_root=args.val_image_root,
+        )
+        patch_tinyperson_window_dataset(
+            cfg.test_dataloader.dataset,
+            ann_file=args.window_test_ann,
+            image_root=args.window_test_root or args.test_image_root,
+        )
     set_resize_scale(cfg.train_dataloader.dataset.pipeline, tuple(args.img_scale))
     set_resize_scale(cfg.val_dataloader.dataset.pipeline, tuple(args.img_scale))
     set_resize_scale(cfg.test_dataloader.dataset.pipeline, tuple(args.img_scale))
@@ -358,6 +402,9 @@ def patch_config(cfg: Any, model_name: str, args: argparse.Namespace, dataset_ou
     cfg.test_dataloader.persistent_workers = args.num_workers > 0
     patch_evaluator(cfg.val_evaluator, dataset_out, "val")
     patch_evaluator(cfg.test_evaluator, dataset_out, "test")
+    if args.tinyperson_window_protocol:
+        cfg.val_evaluator.ann_file = args.window_val_ann
+        cfg.test_evaluator.ann_file = args.window_test_ann
     cfg.train_cfg.max_epochs = args.epochs
     cfg.train_cfg.val_interval = args.val_interval
     if args.lr is not None and "optim_wrapper" in cfg:
@@ -658,6 +705,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-image-root", default="")
     parser.add_argument("--val-image-root", default="")
     parser.add_argument("--test-image-root", default="")
+    parser.add_argument(
+        "--tinyperson-window-protocol",
+        action="store_true",
+        help="Use the established TinyPerson corner-window annotations and loader.",
+    )
+    parser.add_argument("--window-train-ann", default="")
+    parser.add_argument("--window-val-ann", default="")
+    parser.add_argument("--window-test-ann", default="")
+    parser.add_argument("--window-test-root", default="")
     parser.add_argument("--skip-dataset-prepare", action="store_true")
     parser.add_argument("--work-dir", default="SR-TOD/work_dirs/varroa_srtod")
     parser.add_argument("--gt-source", default="gt_one", choices=GT_SOURCES)
