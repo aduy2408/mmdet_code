@@ -36,6 +36,11 @@ def convert(data_root: Path, out: Path) -> Path:
                 continue
             with Image.open(image) as im:
                 width, height = im.size
+            image_dir = out / split
+            image_dir.mkdir(parents=True, exist_ok=True)
+            image_link = image_dir / image.name
+            if not image_link.exists():
+                image_link.symlink_to(image)
             records.append({"id": image_id, "file_name": image.name, "width": width, "height": height})
             annotation_file = source / "annotations" / f"{image.stem}.txt"
             if annotation_file.is_file():
@@ -75,7 +80,7 @@ def patch_cfg(config_path: Path, dataset: Path, work_dir: Path, epochs: int, bat
         loader.dataset.type = "CocoDataset"
         loader.dataset.data_root = str(dataset)
         loader.dataset.ann_file = f"annotations/{split}.json"
-        loader.dataset.data_prefix = dict(img="")
+        loader.dataset.data_prefix = dict(img=f"{split}/")
         loader.dataset.metainfo = dict(classes=tuple(CLASSES))
         for step in loader.dataset.pipeline:
             if step.get("type") == "Resize":
