@@ -402,6 +402,15 @@ def patch_config(cfg: Any, model_name: str, args: argparse.Namespace, dataset_ou
             cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
             train_dataset = cfg.train_dataloader.dataset
             if train_dataset.get("type") == "MultiImageMixDataset":
+                train_inner = train_dataset.dataset
+            else:
+                train_inner = train_dataset
+            train_inner.pipeline = [
+                step
+                for step in train_inner.pipeline
+                if step.get("type") in {"LoadTinyPersonImageFromFile", "LoadAnnotations"}
+            ]
+            if train_dataset.get("type") == "MultiImageMixDataset":
                 train_dataset.pipeline = tinyperson_mosaic_pipeline(tuple(args.img_scale))
             else:
                 cfg.train_dataloader.dataset = dict(
