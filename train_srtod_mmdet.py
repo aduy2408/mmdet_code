@@ -276,12 +276,15 @@ def fix_custom_imports(obj: Any) -> None:
     ]
 
 
-def patch_dataset_cfg(dataset: Any, dataset_out: Path, split: str) -> None:
+def patch_dataset_cfg(dataset: Any, dataset_out: Path, split: str, class_name: str) -> None:
+    if dataset.get("type") == "MultiImageMixDataset" and dataset.get("dataset") is not None:
+        patch_dataset_cfg(dataset.dataset, dataset_out, split, class_name)
+        return
     dataset.type = "CocoDataset"
     dataset.data_root = str(dataset_out)
     dataset.ann_file = f"annotations/{split}.json"
     dataset.data_prefix = dict(img=f"images/{split}/")
-    dataset.metainfo = dict(classes=("varroa",))
+    dataset.metainfo = dict(classes=(class_name,))
 
 
 def patch_evaluator(evaluator: Any, dataset_out: Path, split: str) -> None:
@@ -338,9 +341,9 @@ def patch_config(cfg: Any, model_name: str, args: argparse.Namespace, dataset_ou
 
     cfg.val_dataloader = deepcopy(cfg.val_dataloader)
     cfg.test_dataloader = deepcopy(cfg.test_dataloader)
-    patch_dataset_cfg(cfg.train_dataloader.dataset, dataset_out, "train")
-    patch_dataset_cfg(cfg.val_dataloader.dataset, dataset_out, "val")
-    patch_dataset_cfg(cfg.test_dataloader.dataset, dataset_out, "test")
+    patch_dataset_cfg(cfg.train_dataloader.dataset, dataset_out, "train", args.class_name)
+    patch_dataset_cfg(cfg.val_dataloader.dataset, dataset_out, "val", args.class_name)
+    patch_dataset_cfg(cfg.test_dataloader.dataset, dataset_out, "test", args.class_name)
     set_resize_scale(cfg.train_dataloader.dataset.pipeline, tuple(args.img_scale))
     set_resize_scale(cfg.val_dataloader.dataset.pipeline, tuple(args.img_scale))
     set_resize_scale(cfg.test_dataloader.dataset.pipeline, tuple(args.img_scale))
@@ -650,6 +653,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", default="data")
     parser.add_argument("--dataset-out", default="SR-TOD/data/varroa_coco")
+    parser.add_argument("--dataset-name", default="Varroa")
+    parser.add_argument("--class-name", default="varroa")
+    parser.add_argument("--skip-dataset-prepare", action="store_true")
     parser.add_argument("--work-dir", default="SR-TOD/work_dirs/varroa_srtod")
     parser.add_argument("--gt-source", default="gt_one", choices=GT_SOURCES)
     parser.add_argument("--class-policy", default="map-3-to-1", choices=CLASS_POLICIES)
@@ -704,7 +710,9 @@ def main() -> None:
     if not 0 <= args.machine_index < args.num_machines:
         raise ValueError("--machine-index must be in [0, num_machines)")
 
-    dataset_out = prepare_coco_dataset(args)
+    dataset_out = resolve_path(args.dataset_out)
+    if not args.skip_dataset_prepare:
+        dataset_out = prepare_coco_dataset(args)
     jobs = build_jobs(args)
     assigned = [(idx, job) for idx, job in enumerate(jobs) if idx % args.num_machines == args.machine_index]
     print(f"Jobs total={len(jobs)} assigned={len(assigned)} machine={args.machine_index}/{args.num_machines}")
