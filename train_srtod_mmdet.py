@@ -361,6 +361,20 @@ def patch_config(cfg: Any, model_name: str, args: argparse.Namespace, dataset_ou
         cfg.optim_wrapper.optimizer.lr = args.lr
     if args.weight_decay is not None:
         cfg.optim_wrapper.optimizer.weight_decay = args.weight_decay
+    if args.optimizer:
+        imports = list(cfg.get("custom_imports", {}).get("imports", []))
+        if args.optimizer == "MuSGD" and "srtod_project.optim.musgd" not in imports:
+            imports.append("srtod_project.optim.musgd")
+        cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
+        optimizer = dict(type=args.optimizer, lr=args.lr or 0.01, momentum=0.9,
+                         nesterov=True, weight_decay=args.weight_decay or 0.0005)
+        if args.optimizer == "MuSGD":
+            optimizer.update(muon=0.2, sgd=1.0)
+        wrapper = dict(type="AmpOptimWrapper" if args.amp else "OptimWrapper",
+                       optimizer=optimizer)
+        if args.amp:
+            wrapper["loss_scale"] = "dynamic"
+        cfg.optim_wrapper = wrapper
     set_score_threshold(cfg.model, args.score_thr)
     if args.soft_nms:
         set_soft_nms(cfg.model.test_cfg, args.soft_nms_iou_thr, args.soft_nms_min_score)
@@ -648,6 +662,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--lr", type=float, default=None, help="Override config optimizer lr; default keeps SR-TOD config.")
     parser.add_argument("--weight-decay", type=float, default=None)
+    parser.add_argument("--optimizer", choices=("MuSGD", "SGD"), default="",
+                        help="Explicit optimizer override for a variant run.")
     parser.add_argument("--amp", action="store_true")
     parser.add_argument(
         "--keep-pretrained-init",
