@@ -360,9 +360,9 @@ def patch_config(cfg: Any, model_name: str, args: argparse.Namespace, dataset_ou
     patch_evaluator(cfg.test_evaluator, dataset_out, "test")
     cfg.train_cfg.max_epochs = args.epochs
     cfg.train_cfg.val_interval = args.val_interval
-    if args.lr is not None:
+    if args.lr is not None and "optim_wrapper" in cfg:
         cfg.optim_wrapper.optimizer.lr = args.lr
-    if args.weight_decay is not None:
+    if args.weight_decay is not None and "optim_wrapper" in cfg:
         cfg.optim_wrapper.optimizer.weight_decay = args.weight_decay
     if args.optimizer:
         imports = list(cfg.get("custom_imports", {}).get("imports", []))
