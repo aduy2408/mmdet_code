@@ -311,6 +311,15 @@ def patch_tinyperson_window_dataset(
             step["type"] = "LoadTinyPersonImageFromFile"
 
 
+def tinyperson_mosaic_pipeline(scale: tuple[int, int]) -> list[dict[str, Any]]:
+    return [
+        dict(type="Mosaic", img_scale=scale, pad_val=114.0, prob=1.0),
+        dict(type="Resize", scale=scale, keep_ratio=True),
+        dict(type="RandomFlip", prob=0.5),
+        dict(type="PackDetInputs"),
+    ]
+
+
 def patch_evaluator(evaluator: Any, dataset_out: Path, split: str) -> None:
     evaluator.type = "CocoMetric"
     evaluator.ann_file = str(dataset_out / "annotations" / f"{split}.json")
@@ -388,6 +397,20 @@ def patch_config(cfg: Any, model_name: str, args: argparse.Namespace, dataset_ou
             ann_file=args.window_test_ann,
             image_root=args.window_test_root or args.test_image_root,
         )
+        if args.mosaic:
+            imports = list(cfg.get("custom_imports", {}).get("imports", []))
+            if "projects.set" not in imports:
+                imports.append("projects.set")
+            cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
+            train_dataset = cfg.train_dataloader.dataset
+            if train_dataset.get("type") == "MultiImageMixDataset":
+                train_dataset.pipeline = tinyperson_mosaic_pipeline(tuple(args.img_scale))
+            else:
+                cfg.train_dataloader.dataset = dict(
+                    type="MultiImageMixDataset",
+                    dataset=train_dataset,
+                    pipeline=tinyperson_mosaic_pipeline(tuple(args.img_scale)),
+                )
     set_resize_scale(cfg.train_dataloader.dataset.pipeline, tuple(args.img_scale))
     set_resize_scale(cfg.val_dataloader.dataset.pipeline, tuple(args.img_scale))
     set_resize_scale(cfg.test_dataloader.dataset.pipeline, tuple(args.img_scale))
@@ -714,6 +737,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-val-ann", default="")
     parser.add_argument("--window-test-ann", default="")
     parser.add_argument("--window-test-root", default="")
+    parser.add_argument("--mosaic", action="store_true")
     parser.add_argument("--skip-dataset-prepare", action="store_true")
     parser.add_argument("--work-dir", default="SR-TOD/work_dirs/varroa_srtod")
     parser.add_argument("--gt-source", default="gt_one", choices=GT_SOURCES)
