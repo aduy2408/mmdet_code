@@ -80,7 +80,7 @@ def write_manifest(job: dict[str, object]) -> Path:
         "image_size": [job["image_size"], job["image_size"]],
         "batch_size": 8,
         "epochs": 100,
-        "patience": 0,
+        "patience": 15,
         "workers": 8,
         "amp": False,
         "optimizer": {
@@ -126,7 +126,7 @@ def command_for(job: dict[str, object]) -> list[str]:
         "--epochs",
         "100",
         "--patience",
-        "0",
+        "15",
         "--batch-size",
         "8",
         "--workers",
