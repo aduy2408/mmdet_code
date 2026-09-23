@@ -625,7 +625,7 @@ def run_job(model_name: str, args: argparse.Namespace, dataset_out: Path) -> Non
     if args.test_only:
         checkpoint_path = resolve_test_checkpoint(model_name, args, work_dir)
         result_dir = run_final_test(config_path, checkpoint_path, work_dir)
-        write_job_summary(model_name, config_path, checkpoint_path, result_dir, work_dir, started_at)
+        write_job_summary(model_name, config_path, checkpoint_path, result_dir, work_dir, started_at, args)
         upload_work_dir_to_hf(args)
         return
 
