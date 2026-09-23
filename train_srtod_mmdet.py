@@ -399,8 +399,6 @@ def patch_config(cfg: Any, model_name: str, args: argparse.Namespace, dataset_ou
         )
         if args.mosaic:
             imports = list(cfg.get("custom_imports", {}).get("imports", []))
-            if "projects.set" not in imports:
-                imports.append("projects.set")
             cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
             train_dataset = cfg.train_dataloader.dataset
             if train_dataset.get("type") == "MultiImageMixDataset":
