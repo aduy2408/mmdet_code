@@ -102,6 +102,7 @@ def main() -> None:
     p.add_argument("--dataset-root", type=Path, required=True)
     p.add_argument("--work-dir", type=Path, required=True)
     p.add_argument("--epochs", type=int, default=100)
+    p.add_argument("--patience", type=int, default=0)
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--hf-repo-id", required=True)
