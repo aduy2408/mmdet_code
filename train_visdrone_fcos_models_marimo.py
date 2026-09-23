@@ -10,6 +10,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+for _candidate in (Path("/marimo/yolo_code"), ROOT.parent / "yolo_code"):
+    if (_candidate / "utils").is_dir() and str(_candidate) not in sys.path:
+        sys.path.insert(0, str(_candidate))
 SEED = 42
 CLASSES = ["pedestrian", "people", "bicycle", "car", "van", "truck", "tricycle", "awning-tricycle", "bus", "motor"]
 SPLITS = {"train": "VisDrone2019-DET-train", "val": "VisDrone2019-DET-val", "test": "VisDrone2019-DET-test-dev"}
@@ -50,7 +53,7 @@ def convert(data_root: Path, out: Path) -> Path:
     return out
 
 
-def patch_cfg(config_path: Path, dataset: Path, work_dir: Path, epochs: int, batch_size: int, workers: int):
+def patch_cfg(config_path: Path, dataset: Path, work_dir: Path, epochs: int, batch_size: int, workers: int, seed: int = SEED):
     from mmengine.config import Config
     cfg = Config.fromfile(str(config_path), import_custom_modules=False)
     if "custom_imports" not in cfg:
@@ -87,7 +90,7 @@ def patch_cfg(config_path: Path, dataset: Path, work_dir: Path, epochs: int, bat
     cfg.test_dataloader.num_workers = workers
     cfg.train_cfg.max_epochs = epochs
     cfg.train_cfg.val_interval = 1
-    cfg.randomness = dict(seed=SEED)
+    cfg.randomness = dict(seed=seed)
     cfg.work_dir = str(work_dir)
     return cfg
 
@@ -102,6 +105,9 @@ def main() -> None:
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--hf-repo-id", required=True)
+    p.add_argument("--seed", type=int, default=SEED)
+    p.add_argument("--split-seed", type=int, default=SEED)
+    p.add_argument("--model-yaml", type=Path, default=None)
     args = p.parse_args()
     from utils.marimo_ops import require_training_context
     require_training_context(hf_repo_id=args.hf_repo_id)
@@ -110,7 +116,8 @@ def main() -> None:
     dataset = convert(args.data_root.resolve(), args.dataset_root.resolve())
     run_dir = args.work_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
-    config = patch_cfg(CONFIGS[args.model], dataset, run_dir, args.epochs, args.batch_size, args.workers)
+    config_path = (args.model_yaml or CONFIGS[args.model]).resolve()
+    config = patch_cfg(config_path, dataset, run_dir, args.epochs, args.batch_size, args.workers, args.seed)
     patched = run_dir / "patched_config.py"
     config.dump(str(patched))
     from mmengine.runner import Runner
@@ -122,7 +129,7 @@ def main() -> None:
     runner.test()
     metrics = {"val/AP50": None, "val/mAP50-95": None, "test/AP50": None, "test/mAP50-95": None}
     (run_dir / "evaluation_metrics.json").write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
-    manifest = {"experiment_id": f"visdrone-{args.model}-seed42", "baseline": {"config": str(CONFIGS[args.model].resolve())}, "variant": {"explicit_change": "official VisDrone2019-DET data adapter; one training seed"}, "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(), "runner": str(Path(__file__).resolve()), "python_executable": sys.executable, "dataset_root": str(args.data_root.resolve()), "dataset_yaml": str(dataset), "split_seed": None, "training_seed": SEED, "model/backbone/pretrained source": "FCOS-SET or SR-TOD Faster R-CNN / ResNet-50 / torchvision://resnet50", "image_size, batch_size, epochs, patience, AMP": [640, args.batch_size, args.epochs, 0, False], "NMS IoU": 0.5, "HF repo and remote prefix": [args.hf_repo_id, f"runs/{args.model}/seed_42"], "required artifacts": ["patched_config.py", "latest.pth", "evaluation_metrics.json", "experiment_manifest.json"], "upload_required": True, **metrics}
+    manifest = {"experiment_id": f"visdrone-{args.model}-seed42", "baseline": {"config": str(config_path)}, "variant": {"explicit_change": "official VisDrone2019-DET data adapter; one training seed"}, "source_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(), "runner": str(Path(__file__).resolve()), "python_executable": sys.executable, "dataset_root": str(args.data_root.resolve()), "dataset_yaml": str(dataset), "split_seed": args.split_seed, "training_seed": args.seed, "model/backbone/pretrained source": "FCOS-SET or SR-TOD Faster R-CNN / ResNet-50 / torchvision://resnet50", "image_size, batch_size, epochs, patience, AMP": [640, args.batch_size, args.epochs, 0, False], "NMS IoU": 0.5, "HF repo and remote prefix": [args.hf_repo_id, f"runs/{args.model}/seed_42"], "required artifacts": ["patched_config.py", "latest.pth", "evaluation_metrics.json", "experiment_manifest.json"], "upload_required": True, **metrics}
     (run_dir / "experiment_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     from huggingface_hub import HfApi
     api = HfApi(token=os.environ["HF_TOKEN"])
