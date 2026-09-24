@@ -163,6 +163,13 @@ def main() -> None:
     runner.train()
     checkpoint = run_dir / "latest.pth"
     if not checkpoint.is_file():
+        pointer = run_dir / "last_checkpoint"
+        if pointer.is_file():
+            checkpoint = Path(pointer.read_text(encoding="utf-8").strip())
+        if not checkpoint.is_file():
+            candidates = sorted(run_dir.glob("epoch_*.pth"))
+            checkpoint = candidates[-1] if candidates else checkpoint
+    if not checkpoint.is_file():
         raise RuntimeError(f"Missing checkpoint: {checkpoint}")
     runner.test()
     metrics = {"val/AP50": None, "val/mAP50-95": None, "test/AP50": None, "test/mAP50-95": None}
