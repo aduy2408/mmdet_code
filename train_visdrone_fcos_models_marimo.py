@@ -142,6 +142,8 @@ def main() -> None:
     run_dir = args.work_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     config_path = (args.model_yaml or CONFIGS[args.model]).resolve()
+    if args.model == "fcos_srtod":
+        sys.path.insert(0, str(ROOT / "SR-TOD"))
     config = patch_cfg(
         config_path,
         dataset,
