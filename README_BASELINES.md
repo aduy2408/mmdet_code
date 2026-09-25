@@ -166,6 +166,45 @@ Use `--yolo-protocol mosaic` to enable the corresponding Mosaic variant.
 Run through `utils.marimo_ops` preflight and launch on Marimo. Do not launch
 training directly from the local machine.
 
+## VisDrone2019-DET MMDetection baseline matrix
+
+`train_visdrone_mmdet_baselines.py` provides an explicit registry for six
+MMDetection baselines:
+
+| Name | Canonical config |
+|---|---|
+| `fcos` | `configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py` |
+| `faster_rcnn` | `configs/faster_rcnn/faster-rcnn_r50_fpn_1x_coco.py` |
+| `atss` | `configs/atss/atss_r50_fpn_1x_coco.py` |
+| `cascade_rcnn` | `configs/cascade_rcnn/cascade-rcnn_r50_fpn_1x_coco.py` |
+| `rtmdet` | `configs/rtmdet/rtmdet_s_8xb32-300e_coco.py` |
+| `retinanet` | `configs/retinanet/retinanet_r50_fpn_1x_coco.py` |
+
+The launcher retains the official `VisDrone2019-DET-train`, `-val`, and
+`-test-dev` split, converts annotations to COCO, and applies the same protocol
+to every model: 640x640, batch 8, 8 workers, MuSGD with lr 0.01, 100 epochs,
+early-stop patience 15, and NMS IoU 0.5. The default AMP setting is off and
+must be enabled explicitly with `--amp` for all rows of a comparison.
+
+Run the dry-run first in the Marimo MMDetection environment:
+
+```bash
+/marimo/mmdet-venv/bin/python mmdetection/train_visdrone_mmdet_baselines.py \
+  --data-root /marimo/VisDrone2019 \
+  --models fcos,faster_rcnn,atss,cascade_rcnn,rtmdet,retinanet \
+  --epochs 100 --early-stop-patience 15 \
+  --lr 0.01 --batch-size 8 --workers 8 --image-size 640 640 \
+  --hf-repo-id <hf-user>/visdrone-mmdet-baselines \
+  --dry-run
+```
+
+After preflight, launch the same command through `utils.marimo_ops`. Full runs
+require `HF_TOKEN` in the detached Marimo child environment and verify each
+model's remote prefix before the next model starts. The generated
+`experiment_manifest.json` records the exact canonical config, resolved data
+root, source commit, seeds, optimizer, runtime settings, and required
+artifacts.
+
 For the requested two-server matrix, use
 `mmdetection/run_varroa_yolo_two_server.py`. It assigns the four explicit
 baselines (`fcos`, `faster_rcnn`, `cascade_rcnn`, `rtmdet`) across two servers,
