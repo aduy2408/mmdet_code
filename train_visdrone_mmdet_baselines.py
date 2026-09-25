@@ -10,6 +10,7 @@ MMDetection environment, not the notebook Python.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import shutil
@@ -80,6 +81,21 @@ def source_commit() -> str:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown"
+
+
+def ensure_mmdet_imports() -> None:
+    """Load the repository compatibility shim before importing MMDetection."""
+    compat = ROOT / "blackwell_compat"
+    shim_path = compat / "sitecustomize.py"
+    if shim_path.is_file():
+        spec = importlib.util.spec_from_file_location("_varroa_blackwell_compat", shim_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load compatibility shim: {shim_path}")
+        shim = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(shim)
+    for path in (ROOT, MMDET_ROOT):
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
 
 
 def visdrone_source(data_root: Path, split: str) -> Path:
@@ -267,6 +283,7 @@ def patch_config(cfg: Any, model: str, args: argparse.Namespace, dataset_out: Pa
 
 
 def write_config(model: str, args: argparse.Namespace, dataset_out: Path, work_dir: Path) -> Path:
+    ensure_mmdet_imports()
     from mmengine.config import Config
     from mmdet.utils import register_all_modules
 
@@ -322,6 +339,17 @@ def upload(work_dir: Path, args: argparse.Namespace, model: str) -> None:
     files = api.list_repo_files(repo_id=args.hf_repo_id, repo_type=args.hf_repo_type)
     if not any(path.startswith(prefix + "/") for path in files):
         raise RuntimeError(f"Upload verifier did not find remote prefix {prefix}")
+    marker = work_dir / "upload_complete.json"
+    marker.write_text(
+        json.dumps({"repo_id": args.hf_repo_id, "remote_prefix": prefix, "verified": True}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    api.upload_file(
+        path_or_fileobj=str(marker),
+        path_in_repo=f"{prefix}/upload_complete.json",
+        repo_id=args.hf_repo_id,
+        repo_type=args.hf_repo_type,
+    )
     print(f"UPLOAD VERIFIED hf://{args.hf_repo_type}/{args.hf_repo_id}/{prefix}")
 
 
@@ -375,6 +403,10 @@ def main() -> None:
     if args.epochs <= 0 or args.patience < 0 or args.batch_size <= 0 or args.workers < 0:
         raise ValueError("epochs, batch-size must be positive and patience/workers cannot be negative")
     if not args.dry_run:
+        sys.path.insert(0, str(ROOT))
+        from utils.marimo_ops import require_training_context
+
+        require_training_context(hf_repo_id=args.hf_repo_id)
         validate_upload_requirements(args)
     dataset_out = prepare_dataset(args)
     print(json.dumps({
