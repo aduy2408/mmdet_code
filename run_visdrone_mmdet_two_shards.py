@@ -106,6 +106,7 @@ def launch(args: argparse.Namespace, model: str, seed: int) -> None:
         PYTHON, str(RUNNER), "--python", PYTHON,
         "--data-root", args.data_root, "--dataset-out", args.dataset_out,
         "--work-dir", args.work_dir, "--models", model,
+        "--no-rebuild-dataset",
         "--model-yaml", str(ROOT / "mmdetection" / CONFIGS[model]),
         "--epochs", str(args.epochs), "--patience", str(args.patience),
         "--lr", str(args.lr), "--batch-size", str(args.batch_size),
