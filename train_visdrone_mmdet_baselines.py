@@ -56,6 +56,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-out", default="mmdetection/data/visdrone2019_coco")
     parser.add_argument("--work-dir", default="mmdetection/work_dirs/visdrone2019_baselines")
     parser.add_argument("--models", default=",".join(MODEL_CONFIGS))
+    parser.add_argument("--model-yaml", default="", help="Explicit canonical config path for Marimo contract validation.")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--early-stop-patience", "--patience", dest="patience", type=int, default=15)
     parser.add_argument("--lr", type=float, default=0.01)
@@ -64,6 +65,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image-size", type=int, nargs=2, default=(640, 640), metavar=("W", "H"))
     parser.add_argument("--nms-iou", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--split-seed", type=int, default=42, help="Fixed protocol seed recorded for the official split.")
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--rebuild-dataset", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--copy-images", action=argparse.BooleanOptionalAction, default=False)
@@ -185,6 +187,13 @@ def prepare_dataset(args: argparse.Namespace) -> Path:
         coco = convert_split(data_root, output, split, args.copy_images)
         (ann_dir / f"{split}.json").write_text(json.dumps(coco), encoding="utf-8")
         print(f"DATASET {split}: images={len(coco['images'])} boxes={len(coco['annotations'])}")
+    (output / "visdrone2019.yaml").write_text(
+        "path: " + str(output) + "\n"
+        "train: images/train\n"
+        "val: images/val\n"
+        "test: images/test\n",
+        encoding="utf-8",
+    )
     return output
 
 
@@ -308,7 +317,7 @@ def write_config(model: str, args: argparse.Namespace, dataset_out: Path, work_d
         "python_executable": args.python,
         "dataset_root": str(Path(args.data_root).expanduser().resolve()),
         "split": "official VisDrone2019-DET train/val/test-dev",
-        "split_seed": "not applicable, official split retained",
+        "split_seed": args.split_seed,
         "training_seed": args.seed,
         "model_backbone_pretrained_source": str(config_path),
         "resolved_model_components": resolved_model,
@@ -374,7 +383,9 @@ def run_model(model: str, args: argparse.Namespace, dataset_out: Path) -> None:
         work_dir = (ROOT / work_dir).resolve()
     work_dir = work_dir / model / f"seed{args.seed}"
     config_path = write_config(model, args, dataset_out, work_dir)
-    command = [args.python, str(MMDET_ROOT / "tools" / "train.py"), str(config_path), "--work-dir", str(work_dir)]
+    command = [
+        args.python, str(MMDET_ROOT / "tools" / "train.py"), str(config_path), "--work-dir", str(work_dir),
+    ]
     if args.amp:
         command.append("--amp")
     print("RUN", " ".join(command))
