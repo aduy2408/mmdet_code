@@ -424,7 +424,7 @@ def main() -> None:
         "control": {model: MODEL_CONFIGS[model] for model in args.models.split(",")},
         "variant": "official VisDrone split + MuSGD + common runtime settings",
         "source_commit": source_commit(), "dataset_root": str(Path(args.data_root).expanduser().resolve()),
-        "split_seed": "not applicable", "training_seed": args.seed,
+        "split_seed": args.split_seed, "training_seed": args.seed,
         "epochs": args.epochs, "patience": args.patience, "lr": args.lr,
         "batch_size": args.batch_size, "workers": args.workers, "amp": args.amp,
         "nms_iou": args.nms_iou, "upload_required": True,
