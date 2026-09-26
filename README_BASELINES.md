@@ -186,6 +186,11 @@ to every model: 1536x1536, batch 8, 8 workers, MuSGD with lr 0.01, 100 epochs,
 early-stop patience 15, and NMS IoU 0.5. The default AMP setting is off and
 must be enabled explicitly with `--amp` for all rows of a comparison.
 
+The YOLO reference runner exposes `optimizer=auto`; this MMDetection launcher
+uses the explicit MuSGD configuration because MMDetection does not provide the
+same Ultralytics auto-selector. The selected MMDetection optimizer and learning
+rate are recorded in each generated experiment manifest.
+
 Run the dry-run first in the Marimo MMDetection environment:
 
 ```bash
