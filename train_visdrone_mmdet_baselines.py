@@ -395,10 +395,15 @@ def run_model(model: str, args: argparse.Namespace, dataset_out: Path) -> None:
     checkpoints = sorted(work_dir.glob("best_*.pth")) or [work_dir / "latest.pth"]
     checkpoint = checkpoints[0]
     result_dir = work_dir / "test_results"
+    test_env = os.environ.copy()
+    # MMEngine 0.10.7 checkpoints contain trusted HistoryBuffer objects.
+    # PyTorch 2.6 defaults torch.load to weights_only=True, which prevents
+    # MMDetection's test.py from loading these locally generated checkpoints.
+    test_env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
     subprocess.run([
         args.python, str(MMDET_ROOT / "tools" / "test.py"), str(config_path), str(checkpoint),
         "--work-dir", str(result_dir), "--out", str(result_dir / "predictions.pkl"),
-    ], cwd=MMDET_ROOT, check=True)
+    ], cwd=MMDET_ROOT, check=True, env=test_env)
     (work_dir / "completion.json").write_text(
         json.dumps({"finished_at": datetime.now(timezone.utc).isoformat(), "checkpoint": str(checkpoint)}),
         encoding="utf-8",
