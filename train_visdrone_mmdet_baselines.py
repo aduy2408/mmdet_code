@@ -62,7 +62,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--workers", "--num-workers", dest="workers", type=int, default=8)
-    parser.add_argument("--image-size", type=int, nargs=2, default=(640, 640), metavar=("W", "H"))
+    parser.add_argument(
+        "--image-size",
+        type=int,
+        nargs=2,
+        default=(1536, 1536),
+        metavar=("W", "H"),
+        help="Training and evaluation resize shared by all six VisDrone baselines.",
+    )
     parser.add_argument("--nms-iou", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--split-seed", type=int, default=42, help="Fixed protocol seed recorded for the official split.")

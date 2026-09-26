@@ -182,7 +182,7 @@ MMDetection baselines:
 
 The launcher retains the official `VisDrone2019-DET-train`, `-val`, and
 `-test-dev` split, converts annotations to COCO, and applies the same protocol
-to every model: 640x640, batch 8, 8 workers, MuSGD with lr 0.01, 100 epochs,
+to every model: 1536x1536, batch 8, 8 workers, MuSGD with lr 0.01, 100 epochs,
 early-stop patience 15, and NMS IoU 0.5. The default AMP setting is off and
 must be enabled explicitly with `--amp` for all rows of a comparison.
 
@@ -193,7 +193,7 @@ Run the dry-run first in the Marimo MMDetection environment:
   --data-root /marimo/VisDrone2019 \
   --models fcos,faster_rcnn,atss,cascade_rcnn,rtmdet,retinanet \
   --epochs 100 --early-stop-patience 15 \
-  --lr 0.01 --batch-size 8 --workers 8 --image-size 640 640 \
+  --lr 0.01 --batch-size 8 --workers 8 --image-size 1536 1536 \
   --hf-repo-id <hf-user>/visdrone-mmdet-baselines \
   --dry-run
 ```
