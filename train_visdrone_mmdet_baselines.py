@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from rtdetr_runtime import config_path as runtime_config_path, manifest_runtime, runtime_root
+
 
 ROOT = Path(__file__).resolve().parent
 MMDET_ROOT = ROOT / "mmdetection"
@@ -45,6 +47,8 @@ MODEL_CONFIGS = {
     "atss": "configs/atss/atss_r50_fpn_1x_coco.py",
     "cascade_rcnn": "configs/cascade_rcnn/cascade-rcnn_r50_fpn_1x_coco.py",
     "rtmdet": "configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",
+    "detr_r18": "configs/detr/detr_r18_8xb2-500e_coco.py",
+    "rtdetr_r18": "configs/rtdetr/rtdetr_r18vd_8xb2-72e_coco.py",
     "retinanet": "configs/retinanet/retinanet_r50_fpn_1x_coco.py",
 }
 
@@ -53,6 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--python", default=os.environ.get("MMDET_PYTHON", PYTHON_DEFAULT))
     parser.add_argument("--data-root", default="/marimo/VisDrone2019")
+    parser.add_argument("--rtdetr-root", default="third_party/rtdetr-mmdet")
     parser.add_argument("--dataset-out", default="mmdetection/data/visdrone2019_coco")
     parser.add_argument("--work-dir", default="mmdetection/work_dirs/visdrone2019_baselines")
     parser.add_argument("--models", default=",".join(MODEL_CONFIGS))
@@ -105,6 +110,10 @@ def ensure_mmdet_imports() -> None:
     for path in (ROOT, MMDET_ROOT):
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
+
+
+def model_runtime(model: str, args: argparse.Namespace) -> Path:
+    return runtime_root(ROOT, MMDET_ROOT, model, args.rtdetr_root)
 
 
 def visdrone_source(data_root: Path, split: str) -> Path:
@@ -299,12 +308,14 @@ def patch_config(cfg: Any, model: str, args: argparse.Namespace, dataset_out: Pa
 
 
 def write_config(model: str, args: argparse.Namespace, dataset_out: Path, work_dir: Path) -> Path:
-    ensure_mmdet_imports()
+    runtime = model_runtime(model, args)
+    if model != "rtdetr_r18":
+        ensure_mmdet_imports()
+    else:
+        sys.path.insert(0, str(runtime))
     from mmengine.config import Config
-    from mmdet.utils import register_all_modules
 
-    register_all_modules()
-    config_path = MMDET_ROOT / MODEL_CONFIGS[model]
+    config_path = runtime_config_path(ROOT, MMDET_ROOT, model, MODEL_CONFIGS, args.rtdetr_root)
     cfg = Config.fromfile(str(config_path))
     cfg = patch_config(cfg, model, args, dataset_out, work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -327,6 +338,7 @@ def write_config(model: str, args: argparse.Namespace, dataset_out: Path, work_d
         "split_seed": args.split_seed,
         "training_seed": args.seed,
         "model_backbone_pretrained_source": str(config_path),
+        **manifest_runtime(model, runtime),
         "resolved_model_components": resolved_model,
         "image_size": list(args.image_size), "batch_size": args.batch_size,
         "epochs": args.epochs, "patience": args.patience, "amp": args.amp,
@@ -389,16 +401,17 @@ def run_model(model: str, args: argparse.Namespace, dataset_out: Path) -> None:
     if not work_dir.is_absolute():
         work_dir = (ROOT / work_dir).resolve()
     work_dir = work_dir / model / f"seed{args.seed}"
+    runtime = model_runtime(model, args)
     config_path = write_config(model, args, dataset_out, work_dir)
     command = [
-        args.python, str(MMDET_ROOT / "tools" / "train.py"), str(config_path), "--work-dir", str(work_dir),
+        args.python, str(runtime / "tools" / "train.py"), str(config_path), "--work-dir", str(work_dir),
     ]
     if args.amp:
         command.append("--amp")
     print("RUN", " ".join(command))
     if args.dry_run:
         return
-    subprocess.run(command, cwd=MMDET_ROOT, check=True)
+    subprocess.run(command, cwd=runtime, check=True)
     checkpoints = sorted(work_dir.glob("best_*.pth")) or [work_dir / "latest.pth"]
     checkpoint = checkpoints[0]
     result_dir = work_dir / "test_results"
@@ -408,9 +421,9 @@ def run_model(model: str, args: argparse.Namespace, dataset_out: Path) -> None:
     # MMDetection's test.py from loading these locally generated checkpoints.
     test_env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
     subprocess.run([
-        args.python, str(MMDET_ROOT / "tools" / "test.py"), str(config_path), str(checkpoint),
+        args.python, str(runtime / "tools" / "test.py"), str(config_path), str(checkpoint),
         "--work-dir", str(result_dir), "--out", str(result_dir / "predictions.pkl"),
-    ], cwd=MMDET_ROOT, check=True, env=test_env)
+    ], cwd=runtime, check=True, env=test_env)
     (work_dir / "completion.json").write_text(
         json.dumps({"finished_at": datetime.now(timezone.utc).isoformat(), "checkpoint": str(checkpoint)}),
         encoding="utf-8",

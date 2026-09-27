@@ -19,6 +19,8 @@ from typing import Any
 
 from PIL import Image
 
+from rtdetr_runtime import config_path as runtime_config_path, runtime_root
+
 
 MODEL_CONFIGS = {
     "fcos_set": "configs/set/fcos_r50_set.py",
@@ -29,6 +31,8 @@ MODEL_CONFIGS = {
     "cascade_rcnn": "configs/cascade_rcnn/cascade-rcnn_r50_fpn_1x_coco.py",
     "rtmdet": "configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",
     "detr": "configs/detr/detr_r50_8xb2-150e_coco.py",
+    "detr_r18": "configs/detr/detr_r18_8xb2-500e_coco.py",
+    "rtdetr_r18": "configs/rtdetr/rtdetr_r18vd_8xb2-72e_coco.py",
     "dino": "configs/dino/dino-4scale_r50_8xb2-12e_coco.py",
 }
 # ``dino`` selects MMDetection's DINO-DETR implementation.
@@ -45,6 +49,10 @@ def mmdet_root() -> Path:
     if not root.is_dir():
         raise FileNotFoundError(f"Missing MMDetection checkout: {root}")
     return root
+
+
+def model_runtime(model_name: str, args: argparse.Namespace) -> Path:
+    return runtime_root(repo_root(), mmdet_root(), model_name, args.rtdetr_root)
 
 
 def resolve_path(value: str | Path) -> Path:
@@ -413,7 +421,7 @@ def patch_config(
         save_last=True,
     )
     imports = list(cfg.get("custom_imports", {}).get("imports", []))
-    if "projects.set" not in imports:
+    if model_name != "rtdetr_r18" and "projects.set" not in imports:
         imports.append("projects.set")
     cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
     cfg.randomness = dict(seed=args.seed)
@@ -426,12 +434,16 @@ def write_config(
     dataset_out: Path,
     image_dir: Path,
 ) -> Path:
-    root = str(mmdet_root())
+    runtime = model_runtime(model_name, args)
+    root = str(runtime)
     if root not in sys.path:
         sys.path.insert(0, root)
     from mmengine.config import Config
 
-    cfg = Config.fromfile(str(mmdet_root() / MODEL_CONFIGS[model_name]))
+    config_path = runtime_config_path(
+        repo_root(), mmdet_root(), model_name, MODEL_CONFIGS, args.rtdetr_root
+    )
+    cfg = Config.fromfile(str(config_path))
     cfg = patch_config(cfg, model_name, args, dataset_out, image_dir)
     output = Path(cfg.work_dir) / "patched_config.py"
     val_output = Path(cfg.work_dir) / "patched_config_val.py"
@@ -465,16 +477,17 @@ def find_checkpoint(work_dir: Path) -> Path:
     )
 
 
-def run(command: list[str]) -> None:
+def run(command: list[str], runtime: Path | None = None) -> None:
     print("RUN", " ".join(map(str, command)))
     env = os.environ.copy()
     # Do not inherit the live notebook's Python 3.13 path. It can shadow the
     # Python 3.11 MMDetection venv with an incompatible pycocotools wheel.
-    env["PYTHONPATH"] = str(mmdet_root())
+    runtime = runtime or mmdet_root()
+    env["PYTHONPATH"] = str(runtime)
     # MMEngine checkpoints contain HistoryBuffer objects. PyTorch 2.6+ defaults
     # torch.load() to weights_only=True, which rejects these trusted objects.
     env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
-    subprocess.run(command, cwd=mmdet_root(), env=env, check=True)
+    subprocess.run(command, cwd=runtime, env=env, check=True)
 
 
 def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
@@ -496,6 +509,7 @@ def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
         ) from exc
 
     work_dir = resolve_path(args.work_dir) / model_name
+    runtime = model_runtime(model_name, args)
     api = HfApi(token=token)
     api.create_repo(
         repo_id=args.hf_repo_id,
@@ -533,7 +547,7 @@ def run_job(
     if not args.test_only:
         command = [
             args.python,
-            str(mmdet_root() / "tools" / "train.py"),
+            str(runtime / "tools" / "train.py"),
             str(config_path),
             "--work-dir",
             str(work_dir),
@@ -547,7 +561,7 @@ def run_job(
         uploader = threading.Thread(target=periodic_upload, args=(model_name, args, stop), daemon=True)
         uploader.start()
         try:
-            run(command)
+            run(command, runtime)
         finally:
             stop.set()
             uploader.join(timeout=30)
@@ -569,7 +583,7 @@ def run_job(
         run(
             [
                 args.python,
-                str(mmdet_root() / "tools" / "test.py"),
+                str(runtime / "tools" / "test.py"),
                 str(split_config),
                 str(checkpoint),
                 "--work-dir",
@@ -638,6 +652,7 @@ def parse_args() -> argparse.Namespace:
         default=default_python(),
         help="Python executable used for MMDetection train/test subprocesses.",
     )
+    parser.add_argument("--rtdetr-root", default="third_party/rtdetr-mmdet")
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
@@ -696,9 +711,7 @@ def main() -> None:
     print(f"Assigned models ({args.machine_index}/{args.num_machines}): {assigned}")
     if args.dry_run:
         for model_name in assigned:
-            config_path = write_config(
-                model_name, args, dataset_out, image_dir
-            )
+            config_path = write_config(model_name, args, dataset_out, image_dir)
             print(f"CONFIG {model_name}: {config_path}")
         return
     for model_name in assigned:

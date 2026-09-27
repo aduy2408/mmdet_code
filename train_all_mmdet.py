@@ -20,6 +20,12 @@ from typing import Any
 
 from PIL import Image
 
+from rtdetr_runtime import (
+    config_path as runtime_config_path,
+    manifest_runtime,
+    runtime_root,
+)
+
 
 SPLITS = ("train", "val", "test")
 GT_SOURCES = ("gt_one", "gt_filtered")
@@ -42,6 +48,8 @@ MODEL_CONFIGS = {
     "tood": "configs/tood/tood_r50_fpn_1x_coco.py",
     "fcos": "configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py",
     "rtmdet": "configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",
+    "detr_r18": "configs/detr/detr_r18_8xb2-500e_coco.py",
+    "rtdetr_r18": "configs/rtdetr/rtdetr_r18vd_8xb2-72e_coco.py",
     "reppoints": "configs/reppoints/reppoints-moment_r50_fpn-gn_head-gn_1x_coco.py",
 }
 MASK_MODEL_CONFIGS = {
@@ -68,6 +76,10 @@ def mmdet_root() -> Path:
     if not root.is_dir():
         raise FileNotFoundError(f"Missing MMDetection checkout: {root}")
     return root
+
+
+def model_runtime(model_name: str, args: argparse.Namespace) -> Path:
+    return runtime_root(repo_root(), mmdet_root(), model_name, args.rtdetr_root)
 
 
 def ensure_mmdet_imports() -> None:
@@ -428,13 +440,21 @@ def yolo_protocol_pipeline(image_size: tuple[int, int], *, mosaic: bool) -> list
     return pipeline
 
 
-def apply_yolo_protocol(cfg: Any, args: argparse.Namespace, dataset_out: Path) -> None:
+def apply_yolo_protocol(
+    cfg: Any,
+    model_name: str,
+    args: argparse.Namespace,
+    dataset_out: Path,
+) -> None:
     """Apply the explicit Varroa YOLO-matched protocol as a variant config."""
     if args.yolo_protocol == "native":
         return
 
     imports = list(cfg.get("custom_imports", {}).get("imports", []))
-    for module in ("projects.set", "mmdet.engine.hooks"):
+    modules = ["mmdet.engine.hooks"]
+    if model_name != "rtdetr_r18":
+        modules.insert(0, "projects.set")
+    for module in modules:
         if module not in imports:
             imports.append(module)
     cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
@@ -563,7 +583,7 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
     set_nms_iou(cfg.model, args.nms_iou)
     if args.soft_nms:
         set_soft_nms(cfg.model.test_cfg, args.soft_nms_iou_thr, args.soft_nms_min_score)
-    apply_yolo_protocol(cfg, args, dataset_out)
+    apply_yolo_protocol(cfg, model_name, args, dataset_out)
     cfg.work_dir = str(resolve_path(args.work_dir) / model_name / variant)
     cfg.default_hooks.logger.interval = args.log_interval
     cfg.default_hooks.checkpoint.update(
@@ -590,12 +610,16 @@ def patch_config(cfg: Any, model_name: str, variant: str, args: argparse.Namespa
 
 
 def write_patched_config(model_name: str, variant: str, args: argparse.Namespace, dataset_out: Path) -> Path:
+    runtime = model_runtime(model_name, args)
     ensure_mmdet_imports()
     from mmengine.config import Config
     from mmdet.utils import register_all_modules
 
     register_all_modules()
-    config_path = mmdet_root() / MODEL_CONFIGS.get(model_name, MASK_MODEL_CONFIGS.get(model_name, ""))
+    config_path = runtime_config_path(
+        repo_root(), mmdet_root(), model_name,
+        {**MODEL_CONFIGS, **MASK_MODEL_CONFIGS}, args.rtdetr_root,
+    )
     cfg = Config.fromfile(str(config_path))
     cfg = patch_config(cfg, model_name, variant, args, dataset_out)
     out_path = Path(cfg.work_dir) / "patched_config.py"
@@ -627,6 +651,7 @@ def write_patched_config(model_name: str, variant: str, args: argparse.Namespace
         "split_seed": args.split_seed,
         "training_seed": args.seed,
         "model_backbone_pretrained_source": model_name,
+        **manifest_runtime(model_name, runtime),
         "image_size": list(args.img_scale),
         "batch_size": args.batch_size,
         "epochs": args.epochs,
@@ -714,12 +739,18 @@ def resolve_test_checkpoint(model_name: str, variant: str, args: argparse.Namesp
     raise FileNotFoundError(f"Test checkpoint not found: {checkpoint_path}")
 
 
-def run_final_test(config_path: Path, checkpoint_path: Path, work_dir: Path, python: str) -> Path:
+def run_final_test(
+    config_path: Path,
+    checkpoint_path: Path,
+    work_dir: Path,
+    python: str,
+    runtime: Path,
+) -> Path:
     result_dir = work_dir / "test_results"
     result_dir.mkdir(parents=True, exist_ok=True)
     command = [
         python,
-        str(mmdet_root() / "tools" / "test.py"),
+        str(runtime / "tools" / "test.py"),
         str(config_path),
         str(checkpoint_path),
         "--work-dir",
@@ -728,7 +759,7 @@ def run_final_test(config_path: Path, checkpoint_path: Path, work_dir: Path, pyt
         str(result_dir / "predictions.pkl"),
     ]
     print(f"TEST {checkpoint_path} -> {result_dir}")
-    run_trusted_checkpoint_command(command, cwd=mmdet_root())
+    run_trusted_checkpoint_command(command, cwd=runtime)
     return result_dir
 
 
@@ -819,6 +850,7 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
         raise ValueError("--load-compatible-from is not supported when delegating to mmdetection/tools/train.py")
     started_at = utc_now()
     work_dir = resolve_path(args.work_dir) / model_name / variant
+    runtime = model_runtime(model_name, args)
     remote_prefix = (
         f"{args.remote_prefix}/{args.yolo_protocol}/seed{args.seed}/"
         f"{model_name}/{variant}"
@@ -830,13 +862,13 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
         config_path = write_patched_config(model_name, variant, args, dataset_out)
     if args.test_only:
         checkpoint_path = resolve_test_checkpoint(model_name, variant, args, work_dir)
-        result_dir = run_final_test(config_path, checkpoint_path, work_dir, args.python)
+        result_dir = run_final_test(config_path, checkpoint_path, work_dir, args.python, runtime)
         write_job_summary(model_name, variant, config_path, checkpoint_path, result_dir, work_dir, started_at)
         upload_work_dir_to_hf(args, work_dir, remote_prefix)
         return
     command = [
         args.python,
-        str(mmdet_root() / "tools" / "train.py"),
+        str(runtime / "tools" / "train.py"),
         str(config_path),
         "--work-dir",
         str(work_dir),
@@ -857,9 +889,9 @@ def run_job(model_name: str, variant: str, args: argparse.Namespace, dataset_out
         )
         upload_thread.start()
     try:
-        run_trusted_checkpoint_command(command, cwd=mmdet_root())
+        run_trusted_checkpoint_command(command, cwd=runtime)
         checkpoint_path = find_trained_checkpoint(work_dir)
-        result_dir = run_final_test(config_path, checkpoint_path, work_dir, args.python)
+        result_dir = run_final_test(config_path, checkpoint_path, work_dir, args.python, runtime)
         write_job_summary(model_name, variant, config_path, checkpoint_path, result_dir, work_dir, started_at)
     finally:
         stop_upload.set()
@@ -878,6 +910,7 @@ def parse_args() -> argparse.Namespace:
         ),
         help="Python executable used for MMDetection train/test subprocesses.",
     )
+    parser.add_argument("--rtdetr-root", default="third_party/rtdetr-mmdet")
     parser.add_argument("--data-root", default="data")
     parser.add_argument("--dataset-out", default="mmdetection/data/varroa_coco")
     parser.add_argument("--work-dir", default="mmdetection/work_dirs/varroa_train_all")

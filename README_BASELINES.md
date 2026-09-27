@@ -216,3 +216,75 @@ baselines (`fcos`, `faster_rcnn`, `cascade_rcnn`, `rtmdet`) across two servers,
 runs both `no_mosaic` and `mosaic`, and varies training seeds 42 and 43 while
 keeping split seed 42 fixed. Each job uses 640x640, 100 epochs, patience 15,
 batch size 8, 8 workers, MuSGD, and hourly in-progress HF snapshots.
+
+## DETR-R18 and RT-DETR-R18 matrix
+
+The lightweight transformer matrix adds two explicit model names to every
+dataset launcher:
+
+| Name | Canonical config/runtime |
+|---|---|
+| `detr_r18` | `mmdetection/configs/detr/detr_r18_8xb2-500e_coco.py` |
+| `rtdetr_r18` | pinned `flytocc/rtdetr-mmdet` config `configs/rtdetr/rtdetr_r18vd_8xb2-72e_coco.py` |
+
+The project checkout does not contain RT-DETR. Prepare the exact external
+checkout before the dry-run:
+
+```bash
+python mmdetection/setup_rtdetr_mmdet.py --root mmdetection/third_party/rtdetr-mmdet
+```
+
+Both rows use the existing dataset baseline protocol, including its LR,
+batch size, worker count, MuSGD optimizer, image size, AMP setting, NMS IoU,
+and augmentation variant. The requested common training settings are 100
+epochs, early-stop patience 15, split seed 42, and training seeds 42 and 43.
+Use the commands below through the Marimo MMDetection workflow after running
+the dry-run for each command. Do not launch training from the notebook Python.
+
+Varroa, matching the pinned YOLO `no_mosaic` MMDetection protocol:
+
+```bash
+for seed in 42 43; do
+  /marimo/mmdet-venv/bin/python mmdetection/train_all_mmdet.py \
+    --data-root /marimo/Varroa \
+    --models detr_r18,rtdetr_r18 --variants base \
+    --yolo-protocol no_mosaic --epochs 100 --early-stop-patience 15 \
+    --batch-size 8 --num-workers 8 --img-scale 640 640 \
+    --split-seed 42 --seed "$seed" \
+    --rtdetr-root third_party/rtdetr-mmdet --dry-run
+done
+```
+
+LEVIR-Ship and TinyPerson retain their recent baseline image size, batch size,
+workers, and Mosaic variant. Run the corresponding launcher twice, with
+`--seed 42` and `--seed 43`, keeping `--split-seed 42`:
+
+```bash
+/marimo/mmdet-venv/bin/python mmdetection/train_all_levir_baseline.py \
+  --models detr_r18,rtdetr_r18 --epochs 100 --patience 15 \
+  --batch-size 4 --num-workers 4 --image-size 512 \
+  --split-seed 42 --seed 42 \
+  --rtdetr-root third_party/rtdetr-mmdet --dry-run
+
+/marimo/mmdet-venv/bin/python mmdetection/train_all_tinyperson_baseline.py \
+  --models detr_r18,rtdetr_r18 --epochs 100 --patience 15 \
+  --batch-size 2 --num-workers 4 --image-size 640 \
+  --split-seed 42 --seed 42 \
+  --rtdetr-root third_party/rtdetr-mmdet --dry-run
+```
+
+Repeat the two commands with `--seed 43` for the second training seed.
+VisDrone keeps the recent 1536 protocol:
+
+```bash
+/marimo/mmdet-venv/bin/python mmdetection/train_visdrone_mmdet_baselines.py \
+  --models detr_r18,rtdetr_r18 --epochs 100 --early-stop-patience 15 \
+  --lr 0.01 --batch-size 8 --workers 8 --image-size 1536 1536 \
+  --split-seed 42 --seed 42 \
+  --rtdetr-root third_party/rtdetr-mmdet \
+  --hf-repo-id <hf-user>/visdrone-mmdet-baselines --dry-run
+```
+
+Repeat with `--seed 43`. Full runs require `HF_TOKEN` in the detached Marimo
+child environment and must verify the local artifacts and HF remote prefix
+after each model and seed.

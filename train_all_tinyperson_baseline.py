@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import train_all_levir_baseline as common
+from rtdetr_runtime import config_path as runtime_config_path, runtime_root
 
 
 MODEL_CONFIGS = {
@@ -27,6 +28,8 @@ MODEL_CONFIGS = {
     "cascade_rcnn": "configs/cascade_rcnn/cascade-rcnn_r50_fpn_1x_coco.py",
     "rtmdet": "configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",
     "detr": "configs/detr/detr_r50_8xb2-150e_coco.py",
+    "detr_r18": "configs/detr/detr_r18_8xb2-500e_coco.py",
+    "rtdetr_r18": "configs/rtdetr/rtdetr_r18vd_8xb2-72e_coco.py",
     "dino": "configs/dino/dino-4scale_r50_8xb2-12e_coco.py",
 }
 # Keep the public launcher name short while documenting that this is the
@@ -233,10 +236,10 @@ def patch_config(
     elif model_name == "cascade_rcnn":
         # The stock scale 8 produces 32 px anchors on P2. Scale 2 starts at 8 px.
         cfg.model.rpn_head.anchor_generator.scales = [2]
-    cfg.custom_imports = dict(
-        imports=["projects.tinyperson_baselines", "projects.set", "mmdet.engine.hooks"],
-        allow_failed_imports=False,
-    )
+    imports = ["mmdet.engine.hooks"]
+    if model_name != "rtdetr_r18":
+        imports = ["projects.tinyperson_baselines", "projects.set", *imports]
+    cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
     cfg.train_dataloader = deepcopy(cfg.train_dataloader)
     cfg.val_dataloader = deepcopy(cfg.val_dataloader)
     cfg.test_dataloader = deepcopy(cfg.test_dataloader)
@@ -361,12 +364,16 @@ def write_configs(model_name: str, args: argparse.Namespace) -> dict[str, Path]:
     if not test_images.is_dir():
         raise FileNotFoundError(test_images)
 
-    root = str(common.mmdet_root())
+    runtime = common.model_runtime(model_name, args)
+    root = str(runtime)
     if root not in sys.path:
         sys.path.insert(0, root)
     from mmengine.config import Config
 
-    cfg = Config.fromfile(str(common.mmdet_root() / MODEL_CONFIGS[model_name]))
+    config_path = runtime_config_path(
+        common.repo_root(), common.mmdet_root(), model_name, MODEL_CONFIGS, args.rtdetr_root
+    )
+    cfg = Config.fromfile(str(config_path))
     cfg = patch_config(
         cfg,
         model_name,
@@ -409,6 +416,7 @@ def run_final_evaluation(
     args: argparse.Namespace,
 ) -> dict[str, float]:
     work_dir = common.resolve_path(args.work_dir) / model_name
+    runtime = common.model_runtime(model_name, args)
     result_dir = work_dir / "test_results" / split
     result = result_dir / "tinyperson.bbox.json"
     evaluator = common.repo_root() / "evaluate_tinyperson_metrics.py"
@@ -446,7 +454,7 @@ def run_job(
     if not args.test_only:
         command = [
             args.python,
-            str(common.mmdet_root() / "tools" / "train.py"),
+            str(runtime / "tools" / "train.py"),
             str(config),
             "--work-dir",
             str(work_dir),
@@ -462,7 +470,7 @@ def run_job(
         )
         uploader.start()
         try:
-            common.run(command)
+            common.run(command, runtime)
         finally:
             stop.set()
             uploader.join(timeout=30)
@@ -474,14 +482,15 @@ def run_job(
         common.run(
             [
                 args.python,
-                str(common.mmdet_root() / "tools" / "test.py"),
+                str(runtime / "tools" / "test.py"),
                 str(config_paths[split]),
                 str(checkpoint),
                 "--work-dir",
                 str(result_dir),
                 "--out",
                 str(result_dir / "predictions.pkl"),
-            ]
+            ],
+            runtime,
         )
         result_file = result_dir / "tinyperson.bbox.json"
         if not result_file.is_file():
@@ -567,6 +576,7 @@ def parse_args() -> argparse.Namespace:
         default=common.default_python(),
         help="Python executable used for MMDetection and metric subprocesses.",
     )
+    parser.add_argument("--rtdetr-root", default="third_party/rtdetr-mmdet")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--split-seed",
