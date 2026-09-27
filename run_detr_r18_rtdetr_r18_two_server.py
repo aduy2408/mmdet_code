@@ -20,7 +20,8 @@ from pathlib import Path
 CODE_ROOT = Path(__file__).resolve().parent
 PYTHON = "/marimo/mmdet-venv/bin/python"
 RTDETR_ROOT = "/marimo/rtdetr-mmdet"
-MODELS = ("detr_r18", "rtdetr_r18")
+# Recovery order: validate RT-DETR first, then run the DETR jobs that follow it.
+MODELS = ("rtdetr_r18", "detr_r18")
 SEEDS = (42, 43)
 SPLIT_SEED = 42
 EPOCHS = 100
