@@ -717,6 +717,12 @@ def utc_now() -> str:
 def run_trusted_checkpoint_command(command: list[str], *, cwd: Path) -> None:
     env = os.environ.copy()
     env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
+    # RT-DETR is an external MMDetection checkout whose ``tools`` package must
+    # win over the main repository's tools namespace when its scripts run.
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(
+        item for item in (str(cwd), existing_pythonpath) if item
+    )
     subprocess.run(command, cwd=str(cwd), env=env, check=True)
 
 
