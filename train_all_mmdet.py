@@ -451,9 +451,10 @@ def apply_yolo_protocol(
         return
 
     imports = list(cfg.get("custom_imports", {}).get("imports", []))
-    modules = ["mmdet.engine.hooks"]
-    if model_name != "rtdetr_r18":
-        modules.insert(0, "projects.set")
+    # The shared baseline protocol uses MuSGD for every model, including the
+    # external RT-DETR runtime. Import its registry module before Runner builds
+    # the optimizer.
+    modules = ["projects.set", "mmdet.engine.hooks"]
     for module in modules:
         if module not in imports:
             imports.append(module)
