@@ -228,11 +228,35 @@ dataset launcher:
 | `rtdetr_r18` | pinned `flytocc/rtdetr-mmdet` config `configs/rtdetr/rtdetr_r18vd_8xb2-72e_coco.py` |
 
 The project checkout does not contain RT-DETR. Prepare the exact external
-checkout before the dry-run:
+checkout outside the Git worktree on Marimo:
 
 ```bash
 python mmdetection/setup_rtdetr_mmdet.py --root mmdetection/third_party/rtdetr-mmdet
 ```
+
+For the remote servers, use `/marimo/rtdetr-mmdet` so the main checkout stays
+clean for preflight. The two-server queue is:
+
+```bash
+/marimo/mmdet-venv/bin/python -m utils.marimo_ops launch \
+  --cwd /marimo/mmdet_code \
+  --run-dir /marimo/mmdet_code/work_dirs/detr_r18_matrix/supervisor1 \
+  --artifact-root /marimo/mmdet_code/work_dirs/detr_r18_matrix \
+  -- /marimo/mmdet-venv/bin/python \
+  /marimo/mmdet_code/run_detr_r18_rtdetr_r18_two_server.py --machine 1
+
+/marimo/mmdet-venv/bin/python -m utils.marimo_ops launch \
+  --cwd /marimo/mmdet_code \
+  --run-dir /marimo/mmdet_code/work_dirs/detr_r18_matrix/supervisor2 \
+  --artifact-root /marimo/mmdet_code/work_dirs/detr_r18_matrix \
+  -- /marimo/mmdet-venv/bin/python \
+  /marimo/mmdet_code/run_detr_r18_rtdetr_r18_two_server.py --machine 2
+```
+
+The queue uses the task-specific repository
+`duyle2408/detr_r18_rtdetr_r18_matrix_runs`, with dataset-specific remote
+prefixes, and passes `--upload-interval-hours 1.0` to every job. Do not run
+these commands until both supervisor contracts have passed preflight.
 
 Both rows use the existing dataset baseline protocol, including its LR,
 batch size, worker count, MuSGD optimizer, image size, AMP setting, NMS IoU,
