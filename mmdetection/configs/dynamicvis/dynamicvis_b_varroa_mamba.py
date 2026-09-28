@@ -1,5 +1,3 @@
-import os
-
 custom_imports = dict(
     imports=["dynamicvis", "projects.set", "mmdet.engine.hooks"],
     allow_failed_imports=False,
@@ -7,10 +5,7 @@ custom_imports = dict(
 default_scope = "mmdet"
 
 work_dir = "work_dirs/dynamicvis_varroa"
-pretrained_ckpt = os.environ.get(
-    "DYNAMICVIS_PRETRAINED_CKPT",
-    "/marimo/DynamicVis/checkpoints/pretrain_dynamicvis_b_bf16_mamba_epoch_200.pth",
-)
+pretrained_ckpt = "/marimo/DynamicVis/checkpoints/pretrain_dynamicvis_b_bf16_mamba_epoch_200.pth"
 img_size = 640
 batch_size = 8
 num_workers = 8
