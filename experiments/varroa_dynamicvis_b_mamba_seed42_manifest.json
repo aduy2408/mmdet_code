@@ -1,0 +1,33 @@
+{
+  "experiment_id": "varroa_dynamicvis_b_mamba_seed42",
+  "baseline": {
+    "control_config_or_baseline_config": "mmdetection/configs/set/fcos_r50_set.py",
+    "source": "recent Varroa YOLO-matched MMDetection protocol in README_BASELINES.md"
+  },
+  "variant": {
+    "variant_config_or_explicit_change": "DynamicVis-B Mamba backbone + FCOS head, pretrained backbone and pre-neck checkpoint, MuSGD, Varroa COCO adapter",
+    "config": "mmdetection/configs/dynamicvis/dynamicvis_b_varroa_mamba.py",
+    "dynamicvis_source_commit": "265c414f328f410e8c16f9e31f03ff2a6ecc03b0",
+    "pretrained_source": "https://huggingface.co/KyanChen/DynamicVis/resolve/main/pretrain_dynamicvis_b_bf16_mamba_epoch_200.pth"
+  },
+  "source_commit": "e069bcee9adba52fda5bf19f71ea0087b6b021e5",
+  "runner": "mmdetection/train_all_mmdet.py",
+  "python_executable": "/marimo/mmdet-venv/bin/python",
+  "dataset_root": "/marimo/Varroa",
+  "dataset_yaml": "unknown: MMDetection consumes generated COCO annotations, not a YOLO YAML",
+  "split_seed": 42,
+  "training_seed": 42,
+  "model/backbone/pretrained source": "FCOS / DynamicVis-B Mamba / KyanChen DynamicVis pretrain epoch 200",
+  "image_size": [640, 640],
+  "batch_size": 8,
+  "epochs": 100,
+  "patience": 15,
+  "workers": 8,
+  "optimizer": "MuSGD lr=0.01 momentum=0.9 nesterov=true weight_decay=0.0005 muon=0.2 sgd=1.0",
+  "AMP": false,
+  "NMS IoU": 0.5,
+  "HF repo and remote prefix": "duyle2408/varroa-dynamicvis-runs:varroa_dynamicvis/mamba_b/seed42",
+  "required artifacts": ["patched_config.py", "best_or_latest_checkpoint", "results.csv", "evaluation_metrics.json", "experiment_manifest.json", "upload_complete.json"],
+  "upload_required": true,
+  "status": "implementation_manifest_recorded; remote preflight pending"
+}
