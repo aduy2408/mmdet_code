@@ -521,7 +521,7 @@ def upload_work_dir_to_hf(model_name: str, args: argparse.Namespace) -> None:
         private=False,
         exist_ok=True,
     )
-    remote = f"{args.remote_prefix}/{model_name}".strip("/")
+    remote = f"{args.remote_prefix}/seed{args.seed}/{model_name}".strip("/")
     print(f"UPLOAD {work_dir} -> hf://{args.hf_repo_type}/{args.hf_repo_id}/{remote}")
     api.upload_folder(
         folder_path=str(work_dir),
