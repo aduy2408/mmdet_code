@@ -279,9 +279,7 @@ for seed in 42 43; do
 done
 ```
 
-LEVIR-Ship and TinyPerson retain their recent baseline image size, batch size,
-workers, and Mosaic variant. Run the corresponding launcher twice, with
-`--seed 42` and `--seed 43`, keeping `--split-seed 42`:
+LEVIR-Ship and TinyPerson use the requested recent-baseline transformer protocol with batch size 8 and 8 workers, plus the Mosaic variant. Run the corresponding launcher twice, with `--seed 42` and `--seed 43`, keeping `--split-seed 42`:
 
 ```bash
 /marimo/mmdet-venv/bin/python mmdetection/train_all_levir_baseline.py \
@@ -292,7 +290,7 @@ workers, and Mosaic variant. Run the corresponding launcher twice, with
 
 /marimo/mmdet-venv/bin/python mmdetection/train_all_tinyperson_baseline.py \
   --models detr_r18,rtdetr_r18 --epochs 100 --patience 15 \
-  --batch-size 2 --num-workers 4 --image-size 640 \
+  --batch-size 8 --num-workers 8 --image-size 640 \
   --split-seed 42 --seed 42 \
   --rtdetr-root third_party/rtdetr-mmdet --dry-run
 ```
