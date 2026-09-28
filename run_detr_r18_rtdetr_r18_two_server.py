@@ -42,6 +42,11 @@ DATASETS = ("varroa", "levirship", "tinyperson", "visdrone")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--machine", type=int, choices=(1, 2), required=True)
+    parser.add_argument(
+        "--all-jobs",
+        action="store_true",
+        help="Run every non-excluded matrix job sequentially on this host.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--exclude-job", action="append", default=[], metavar="DATASET:MODEL:SEED")
     parser.add_argument("--work-root", default="/marimo/mmdet_code/work_dirs/detr_r18_matrix")
@@ -163,9 +168,11 @@ def main() -> None:
         raise ValueError(f"Unknown --exclude-job values: {sorted(unknown)}")
     assigned = [
         job for index, job in enumerate(all_jobs)
-        if index % 2 == args.machine - 1 and f"{job.dataset}:{job.model}:{job.seed}" not in excluded
+        if (args.all_jobs or index % 2 == args.machine - 1)
+        and f"{job.dataset}:{job.model}:{job.seed}" not in excluded
     ]
-    print(f"machine={args.machine} assigned={len(assigned)} jobs", flush=True)
+    shard_label = "all" if args.all_jobs else str(args.machine)
+    print(f"machine={shard_label} assigned={len(assigned)} jobs", flush=True)
     for job in assigned:
         print(f"  {job.dataset}/{job.model}/seed{job.seed}", flush=True)
     if args.dry_run:
@@ -176,7 +183,7 @@ def main() -> None:
     state_path = Path(args.queue_state)
     state = {
         "experiment": "detr_r18_rtdetr_r18_matrix",
-        "machine": args.machine,
+        "machine": "all" if args.all_jobs else args.machine,
         "split_seed": SPLIT_SEED,
         "epochs": EPOCHS,
         "patience": PATIENCE,
