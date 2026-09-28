@@ -601,7 +601,8 @@ def run_job(
                 str(result_dir),
                 "--out",
                 str(result_dir / "predictions.pkl"),
-            ]
+            ],
+            runtime,
         )
         result_file = result_dir / "levir_ship.bbox.json"
         if not result_file.is_file():
