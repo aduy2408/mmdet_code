@@ -42,11 +42,11 @@ DATASETS = ("varroa", "levirship", "tinyperson", "visdrone")
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--machine", type=int, choices=(1, 2), required=True)
-    parser.add_argument(
-        "--all-jobs",
-        action="store_true",
-        help="Run every non-excluded matrix job sequentially on this host.",
-    )
+    parser.add_argument("--all-jobs", action="store_true", help="Run every non-excluded matrix job sequentially on this host.")
+    parser.add_argument("--epochs", type=int, default=EPOCHS)
+    parser.add_argument("--patience", type=int, default=PATIENCE)
+    parser.add_argument("--split-seed", type=int, default=SPLIT_SEED)
+    parser.add_argument("--hf-repo-id", default="duyle2408/detr_r18_rtdetr_r18_matrix_runs")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--exclude-job", action="append", default=[], metavar="DATASET:MODEL:SEED")
     parser.add_argument("--work-root", default="/marimo/mmdet_code/work_dirs/detr_r18_matrix")
@@ -155,6 +155,10 @@ def write_state(path: Path, payload: dict[str, object]) -> None:
 
 def main() -> None:
     args = parse_args()
+    if args.epochs != EPOCHS or args.patience != PATIENCE or args.split_seed != SPLIT_SEED:
+        raise ValueError("Queue settings must match the recorded matrix contract")
+    if args.hf_repo_id != repo_ids()[DATASETS[0]]:
+        raise ValueError(f"Unexpected HF repository: {args.hf_repo_id}")
     if os.environ.get("MARIMO_TRAIN_WORKFLOW") != "1":
         raise RuntimeError("Launch this queue through python -m utils.marimo_ops launch")
     if not os.environ.get("HF_TOKEN"):
