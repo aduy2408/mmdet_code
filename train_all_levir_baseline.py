@@ -585,10 +585,16 @@ def run_job(
     metrics: dict[str, Any] = {}
     for split, split_config in configs.items():
         result_dir = work_dir / "test_results" / split
+        test_script = (
+            repo_root() / "mmdet_test_wrapper.py"
+            if model_name == "rtdetr_r18"
+            else runtime / "tools" / "test.py"
+        )
         run(
             [
                 args.python,
-                str(runtime / "tools" / "test.py"),
+                str(test_script),
+                *([str(runtime / "tools" / "test.py")] if model_name == "rtdetr_r18" else []),
                 str(split_config),
                 str(checkpoint),
                 "--work-dir",
