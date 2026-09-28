@@ -451,6 +451,7 @@ def run_job(
 ) -> None:
     config = config_paths["train"]
     work_dir = common.resolve_path(args.work_dir) / model_name
+    runtime = common.model_runtime(model_name, args)
     if not args.test_only:
         command = [
             args.python,
