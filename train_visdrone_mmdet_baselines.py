@@ -277,6 +277,18 @@ def patch_config(cfg: Any, model: str, args: argparse.Namespace, dataset_out: Pa
         dataloader.num_workers = args.workers
         dataloader.persistent_workers = args.workers > 0
         replace_resize(dataloader.dataset.pipeline, tuple(args.image_size))
+    if model == "rtdetr_r18":
+        # RT-DETR's FPN concatenation requires fixed, stride-aligned tensors.
+        # The upstream config uses variable-ratio/random-size training, which can
+        # produce odd feature-map dimensions at 1536 on the VisDrone aspect ratios.
+        for dataloader in (cfg.train_dataloader, cfg.val_dataloader, cfg.test_dataloader):
+            replace_resize(dataloader.dataset.pipeline, tuple(args.image_size))
+            for transform in dataloader.dataset.pipeline:
+                if isinstance(transform, dict) and transform.get("type") in {"Resize", "RandomResize"}:
+                    transform["keep_ratio"] = False
+        cfg.model.data_preprocessor = deepcopy(cfg.model.data_preprocessor)
+        cfg.model.data_preprocessor.pad_size_divisor = 32
+        cfg.model.data_preprocessor.batch_augments = []
     cfg.train_dataloader.batch_size = args.batch_size
     cfg.val_evaluator.ann_file = str(dataset_out / "annotations" / "val.json")
     cfg.test_evaluator.ann_file = str(dataset_out / "annotations" / "test.json")
