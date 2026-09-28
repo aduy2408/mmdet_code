@@ -236,9 +236,7 @@ def patch_config(
     elif model_name == "cascade_rcnn":
         # The stock scale 8 produces 32 px anchors on P2. Scale 2 starts at 8 px.
         cfg.model.rpn_head.anchor_generator.scales = [2]
-    imports = ["projects.tinyperson_baselines", "mmdet.engine.hooks"]
-    if model_name != "rtdetr_r18":
-        imports.insert(1, "projects.set")
+    imports = ["projects.tinyperson_baselines", "projects.set", "mmdet.engine.hooks"]
     cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
     cfg.train_dataloader = deepcopy(cfg.train_dataloader)
     cfg.val_dataloader = deepcopy(cfg.val_dataloader)
