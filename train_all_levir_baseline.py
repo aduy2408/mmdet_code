@@ -423,6 +423,8 @@ def patch_config(
     imports = list(cfg.get("custom_imports", {}).get("imports", []))
     if "projects.set" not in imports:
         imports.append("projects.set")
+    if model_name == "rtdetr_r18" and "mmdet.models" not in imports:
+        imports.append("mmdet.models")
     cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
     cfg.randomness = dict(seed=args.seed)
     return cfg
