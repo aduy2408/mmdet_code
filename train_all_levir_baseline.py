@@ -421,7 +421,7 @@ def patch_config(
         save_last=True,
     )
     imports = list(cfg.get("custom_imports", {}).get("imports", []))
-    if model_name != "rtdetr_r18" and "projects.set" not in imports:
+    if "projects.set" not in imports:
         imports.append("projects.set")
     cfg.custom_imports = dict(imports=imports, allow_failed_imports=False)
     cfg.randomness = dict(seed=args.seed)
@@ -483,7 +483,9 @@ def run(command: list[str], runtime: Path | None = None) -> None:
     # Do not inherit the live notebook's Python 3.13 path. It can shadow the
     # Python 3.11 MMDetection venv with an incompatible pycocotools wheel.
     runtime = runtime or mmdet_root()
-    env["PYTHONPATH"] = str(runtime)
+    env["PYTHONPATH"] = os.pathsep.join(
+        str(path) for path in (runtime, mmdet_root())
+    )
     # MMEngine checkpoints contain HistoryBuffer objects. PyTorch 2.6+ defaults
     # torch.load() to weights_only=True, which rejects these trusted objects.
     env.setdefault("TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD", "1")
