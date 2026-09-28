@@ -86,6 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hf-repo-id", required=False, default="")
     parser.add_argument("--hf-repo-type", default="dataset")
     parser.add_argument("--remote-prefix", default="visdrone2019_mmdet_baselines")
+    parser.add_argument("--upload-interval-hours", type=float, default=1.0)
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -344,7 +345,9 @@ def write_config(model: str, args: argparse.Namespace, dataset_out: Path, work_d
         "epochs": args.epochs, "patience": args.patience, "amp": args.amp,
         "optimizer": {"type": "MuSGD", "lr": args.lr}, "workers": args.workers,
         "nms_iou": args.nms_iou, "hf_repo": args.hf_repo_id or "unknown",
+        "upload_interval_hours": args.upload_interval_hours,
         "remote_prefix": f"{args.remote_prefix}/{model}/seed{args.seed}",
+        "upload_interval_hours": args.upload_interval_hours,
         "required_artifacts": ["patched_config.py", "experiment_manifest.json", "checkpoint", "test_results"],
         "upload_required": True,
     }
