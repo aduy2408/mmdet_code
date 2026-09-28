@@ -544,6 +544,7 @@ def run_job(
 ) -> None:
     config_path = write_config(model_name, args, dataset_out, image_dir)
     work_dir = resolve_path(args.work_dir) / model_name
+    runtime = model_runtime(model_name, args)
     if not args.test_only:
         command = [
             args.python,
