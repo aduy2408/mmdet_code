@@ -347,7 +347,6 @@ def write_config(model: str, args: argparse.Namespace, dataset_out: Path, work_d
         "nms_iou": args.nms_iou, "hf_repo": args.hf_repo_id or "unknown",
         "upload_interval_hours": args.upload_interval_hours,
         "remote_prefix": f"{args.remote_prefix}/{model}/seed{args.seed}",
-        "upload_interval_hours": args.upload_interval_hours,
         "required_artifacts": ["patched_config.py", "experiment_manifest.json", "checkpoint", "test_results"],
         "upload_required": True,
     }
@@ -414,7 +413,13 @@ def run_model(model: str, args: argparse.Namespace, dataset_out: Path) -> None:
     print("RUN", " ".join(command))
     if args.dry_run:
         return
-    subprocess.run(command, cwd=runtime, check=True)
+    runtime_env = os.environ.copy()
+    runtime_paths = [str(runtime), str(ROOT), str(MMDET_ROOT)]
+    existing_pythonpath = runtime_env.get("PYTHONPATH")
+    if existing_pythonpath:
+        runtime_paths.append(existing_pythonpath)
+    runtime_env["PYTHONPATH"] = os.pathsep.join(runtime_paths)
+    subprocess.run(command, cwd=runtime, check=True, env=runtime_env)
     checkpoints = sorted(work_dir.glob("best_*.pth")) or [work_dir / "latest.pth"]
     checkpoint = checkpoints[0]
     result_dir = work_dir / "test_results"
@@ -423,6 +428,7 @@ def run_model(model: str, args: argparse.Namespace, dataset_out: Path) -> None:
     # PyTorch 2.6 defaults torch.load to weights_only=True, which prevents
     # MMDetection's test.py from loading these locally generated checkpoints.
     test_env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
+    test_env["PYTHONPATH"] = runtime_env["PYTHONPATH"]
     subprocess.run([
         args.python, str(runtime / "tools" / "test.py"), str(config_path), str(checkpoint),
         "--work-dir", str(result_dir), "--out", str(result_dir / "predictions.pkl"),
