@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse, json, os, random, shutil, sys
 from pathlib import Path
 
+os.environ.setdefault('TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD', '1')
 sys.path[:0] = ['/marimo/DynamicVis', '/marimo/mmdet_code/mmdetection', '/marimo/mmdet_code', '/marimo/mmdet_code/SR-TOD']
 
 PIPELINE = lambda n: [
