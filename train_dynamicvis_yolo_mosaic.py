@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse, json, os, random, shutil, sys
 from pathlib import Path
 
-sys.path[:0] = ['/marimo/DynamicVis', '/marimo/mmdet_code/mmdetection', '/marimo/mmdet_code']
+sys.path[:0] = ['/marimo/DynamicVis', '/marimo/mmdet_code/mmdetection', '/marimo/mmdet_code', '/marimo/mmdet_code/SR-TOD']
 
 PIPELINE = lambda n: [
     dict(type='Mosaic', img_scale=(n,n), pad_val=114.0, prob=1.0),
@@ -51,11 +51,10 @@ def coco_from_yolo(split_root: Path, out: Path, seed: int):
 
 def make_cfg(args, dataset_root: Path, out: Path):
     from mmengine.config import Config
-    import mmdet.models
-    import projects.set  # registers the MuSGD optimizer used by the baseline protocol
     base='/marimo/DynamicVis/configs_DynamicVis/Levir-Ship/dynamicvis_b_levirship_mamba.py'
     cfg=Config.fromfile(base)
-    cfg.custom_imports=dict(imports=['projects.set','mmdet.datasets.transforms','dynamicvis'],allow_failed_imports=False)
+    import srtod_project.optim.musgd  # registers MuSGD without importing projects.set models
+    cfg.custom_imports=dict(imports=['srtod_project.optim.musgd','mmdet.datasets.transforms','dynamicvis'],allow_failed_imports=False)
     cfg.data_root=str(dataset_root); cfg.work_dir=str(out); cfg.img_size=args.imgsz; cfg.crop_size=(args.imgsz,args.imgsz)
     cfg.pretrained_ckpt='/marimo/DynamicVis/checkpoints/pretrain_dynamicvis_b_bf16_mamba_epoch_200.pth'
     meta=dict(classes=('person',) if args.dataset=='tinyperson' else ('ship',))
