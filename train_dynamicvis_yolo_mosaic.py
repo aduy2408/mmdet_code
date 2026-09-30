@@ -69,6 +69,8 @@ def make_cfg(args, dataset_root: Path, out: Path):
     cfg.optim_wrapper=dict(type='AmpOptimWrapper',loss_scale='dynamic',optimizer=dict(type='MuSGD',lr=0.01,momentum=0.9,nesterov=True,weight_decay=0.0005,muon=0.2,sgd=1.0),paramwise_cfg=dict(bias_lr_mult=1.0,bias_decay_mult=0.0),clip_grad=dict(max_norm=35,norm_type=2))
     cfg.param_scheduler=[dict(type='LinearLR',start_factor=0.001,by_epoch=True,begin=0,end=3),dict(type='LinearLR',start_factor=1.0,end_factor=0.01,by_epoch=True,begin=3,end=100)]
     cfg.randomness=dict(seed=42,deterministic=True)
+    cfg.vis_backends=[dict(type='LocalVisBackend')]
+    cfg.visualizer=dict(type='DetLocalVisualizer',vis_backends=cfg.vis_backends,name='visualizer',line_width=2)
     cfg.default_hooks.checkpoint=dict(type='CheckpointHook',interval=1,by_epoch=True,max_keep_ckpts=1,save_last=True,save_best='coco/bbox_mAP',rule='greater')
     cfg.custom_hooks=[dict(type='EarlyStoppingHook',monitor='coco/bbox_mAP',rule='greater',patience=15,min_delta=0.001)]
     cfg.model.bbox_head.num_classes=1; cfg.model.test_cfg.nms=dict(type='nms',iou_threshold=0.5)
