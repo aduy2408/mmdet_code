@@ -89,13 +89,17 @@ def ensure_mmdet_imports() -> None:
     if compat not in sys.path:
         sys.path.insert(0, compat)
     # mmcv-lite omits mmcv._ext. Load the committed FCOS compatibility shim
-    # explicitly so detached launches do not depend on PYTHONPATH site hooks.
-    shim_path = Path(compat) / "sitecustomize.py"
-    spec = importlib.util.spec_from_file_location("_set_blackwell_compat", shim_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot load Blackwell compatibility shim: {shim_path}")
-    shim = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(shim)
+    # only when the active environment truly lacks the extension. A full MMCV
+    # install must keep its real compiled ops, including roi_align and NMS.
+    try:
+        import mmcv._ext  # noqa: F401
+    except Exception:
+        shim_path = Path(compat) / "sitecustomize.py"
+        spec = importlib.util.spec_from_file_location("_set_blackwell_compat", shim_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load Blackwell compatibility shim: {shim_path}")
+        shim = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(shim)
     if root not in sys.path:
         sys.path.insert(0, root)
 
