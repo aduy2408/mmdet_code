@@ -57,6 +57,7 @@ def make_cfg(args, dataset_root: Path, out: Path):
     import srtod_project.optim.musgd  # registers MuSGD without importing projects.set models
     cfg.custom_imports=dict(imports=['srtod_project.optim.musgd','mmdet.datasets.transforms','dynamicvis'],allow_failed_imports=False)
     cfg.data_root=str(dataset_root); cfg.work_dir=str(out); cfg.img_size=args.imgsz; cfg.crop_size=(args.imgsz,args.imgsz)
+    cfg.model.backbone.img_size=args.imgsz
     cfg.pretrained_ckpt='/marimo/DynamicVis/checkpoints/pretrain_dynamicvis_b_bf16_mamba_epoch_200.pth'
     cfg.model.backbone.init_cfg.checkpoint=cfg.pretrained_ckpt
     cfg.model.neck.init_cfg.checkpoint=cfg.pretrained_ckpt
