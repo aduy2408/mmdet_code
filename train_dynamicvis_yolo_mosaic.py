@@ -57,6 +57,8 @@ def make_cfg(args, dataset_root: Path, out: Path):
     cfg.custom_imports=dict(imports=['srtod_project.optim.musgd','mmdet.datasets.transforms','dynamicvis'],allow_failed_imports=False)
     cfg.data_root=str(dataset_root); cfg.work_dir=str(out); cfg.img_size=args.imgsz; cfg.crop_size=(args.imgsz,args.imgsz)
     cfg.pretrained_ckpt='/marimo/DynamicVis/checkpoints/pretrain_dynamicvis_b_bf16_mamba_epoch_200.pth'
+    cfg.model.backbone.init_cfg.checkpoint=cfg.pretrained_ckpt
+    cfg.model.neck.init_cfg.checkpoint=cfg.pretrained_ckpt
     meta=dict(classes=('person',) if args.dataset=='tinyperson' else ('ship',))
     cfg.train_dataloader=dict(batch_size=8,num_workers=8,persistent_workers=True,sampler=dict(type='DefaultSampler',shuffle=True),
         dataset=dict(type='MultiImageMixDataset',dataset=dict(type='CocoDataset',data_root=str(dataset_root),ann_file='annotations/train.json',data_prefix=dict(img=''),metainfo=meta,pipeline=[dict(type='LoadImageFromFile'),dict(type='LoadAnnotations',with_bbox=True)]),pipeline=PIPELINE(args.imgsz)))
