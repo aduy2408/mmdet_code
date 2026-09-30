@@ -51,6 +51,7 @@ def coco_from_yolo(split_root: Path, out: Path, seed: int):
 
 def make_cfg(args, dataset_root: Path, out: Path):
     from mmengine.config import Config
+    import projects.set  # registers the MuSGD optimizer used by the baseline protocol
     base='/marimo/DynamicVis/configs_DynamicVis/Levir-Ship/dynamicvis_b_levirship_mamba.py'
     cfg=Config.fromfile(base)
     cfg.custom_imports=dict(imports=['projects.set','mmdet.datasets.transforms','dynamicvis'],allow_failed_imports=False)
