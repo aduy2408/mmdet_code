@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """DynamicVis adapter for the shared MMDetection YOLO-style Mosaic baseline."""
 from __future__ import annotations
-import argparse, json, os, random, shutil
+import argparse, json, os, random, shutil, sys
 from pathlib import Path
+
+sys.path[:0] = ['/marimo/DynamicVis', '/marimo/mmdet_code/mmdetection', '/marimo/mmdet_code']
 
 PIPELINE = lambda n: [
     dict(type='Mosaic', img_scale=(n,n), pad_val=114.0, prob=1.0,
