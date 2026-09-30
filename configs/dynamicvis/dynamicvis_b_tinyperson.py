@@ -10,7 +10,7 @@ img_size = 640
 crop_size = (img_size, img_size)
 randomness = dict(seed=42, deterministic=False)
 train_cfg = dict(by_epoch=True, max_epochs=100, val_interval=1)
-custom_imports = dict(imports=['dynamicvis', 'mmdet.datasets'], allow_failed_imports=False)
+custom_imports = dict(imports=['dynamicvis', 'mmdet.datasets.transforms'], allow_failed_imports=False)
 
 # Strict TinyPerson baseline protocol: no Mosaic/OACP. Keep only the baseline's
 # resize and horizontal-flip behavior, with DynamicVis's square input size.
