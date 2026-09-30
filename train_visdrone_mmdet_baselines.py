@@ -314,9 +314,10 @@ def patch_config(cfg: Any, model: str, args: argparse.Namespace, dataset_out: Pa
             dict(type="LinearLR", start_factor=1.0 / 3, by_epoch=False, begin=0, end=500),
             dict(type="CosineAnnealingLR", T_max=args.epochs, by_epoch=True, begin=0, end=args.epochs),
         ]
-    cfg.custom_hooks = list(cfg.get("custom_hooks", [])) + [
-        dict(type="EarlyStoppingHook", monitor="coco/bbox_mAP", rule="greater", patience=args.patience, min_delta=0.001)
-    ]
+    if args.optimizer != "config_default":
+        cfg.custom_hooks = list(cfg.get("custom_hooks", [])) + [
+            dict(type="EarlyStoppingHook", monitor="coco/bbox_mAP", rule="greater", patience=args.patience, min_delta=0.001)
+        ]
     cfg.default_hooks.checkpoint = dict(
         type="CheckpointHook", interval=args.checkpoint_interval, save_best="coco/bbox_mAP",
         rule="greater", max_keep_ckpts=1, save_last=True,
