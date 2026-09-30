@@ -65,6 +65,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--early-stop-patience", "--patience", dest="patience", type=int, default=15)
     parser.add_argument("--lr", type=float, default=0.01)
+    parser.add_argument(
+        "--optimizer",
+        choices=("musgd", "config_default"),
+        default="musgd",
+        help="Use historical MuSGD or preserve the canonical model optimizer and scheduler.",
+    )
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--workers", "--num-workers", dest="workers", type=int, default=8)
     parser.add_argument(
@@ -295,18 +301,19 @@ def patch_config(cfg: Any, model: str, args: argparse.Namespace, dataset_out: Pa
     cfg.train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=args.epochs, val_interval=1)
     cfg.val_cfg = dict(type="ValLoop")
     cfg.test_cfg = dict(type="TestLoop")
-    cfg.optim_wrapper = dict(
-        type="OptimWrapper",
-        optimizer=dict(
-            type="MuSGD", lr=args.lr, momentum=0.9, nesterov=True,
-            weight_decay=0.0005, muon=0.2, sgd=1.0,
-        ),
-        clip_grad=dict(max_norm=35, norm_type=2),
-    )
-    cfg.param_scheduler = [
-        dict(type="LinearLR", start_factor=1.0 / 3, by_epoch=False, begin=0, end=500),
-        dict(type="CosineAnnealingLR", T_max=args.epochs, by_epoch=True, begin=0, end=args.epochs),
-    ]
+    if args.optimizer != "config_default":
+        cfg.optim_wrapper = dict(
+            type="OptimWrapper",
+            optimizer=dict(
+                type="MuSGD", lr=args.lr, momentum=0.9, nesterov=True,
+                weight_decay=0.0005, muon=0.2, sgd=1.0,
+            ),
+            clip_grad=dict(max_norm=35, norm_type=2),
+        )
+        cfg.param_scheduler = [
+            dict(type="LinearLR", start_factor=1.0 / 3, by_epoch=False, begin=0, end=500),
+            dict(type="CosineAnnealingLR", T_max=args.epochs, by_epoch=True, begin=0, end=args.epochs),
+        ]
     cfg.custom_hooks = list(cfg.get("custom_hooks", [])) + [
         dict(type="EarlyStoppingHook", monitor="coco/bbox_mAP", rule="greater", patience=args.patience, min_delta=0.001)
     ]
@@ -355,7 +362,7 @@ def write_config(model: str, args: argparse.Namespace, dataset_out: Path, work_d
         "resolved_model_components": resolved_model,
         "image_size": list(args.image_size), "batch_size": args.batch_size,
         "epochs": args.epochs, "patience": args.patience, "amp": args.amp,
-        "optimizer": {"type": "MuSGD", "lr": args.lr}, "workers": args.workers,
+        "optimizer": {"type": "config_default" if args.optimizer == "config_default" else "MuSGD", "lr": args.lr if args.optimizer != "config_default" else "from_model_config"}, "workers": args.workers,
         "nms_iou": args.nms_iou, "hf_repo": args.hf_repo_id or "unknown",
         "upload_interval_hours": args.upload_interval_hours,
         "remote_prefix": f"{args.remote_prefix}/{model}/seed{args.seed}",
