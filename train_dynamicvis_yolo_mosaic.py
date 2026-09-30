@@ -7,8 +7,7 @@ from pathlib import Path
 sys.path[:0] = ['/marimo/DynamicVis', '/marimo/mmdet_code/mmdetection', '/marimo/mmdet_code']
 
 PIPELINE = lambda n: [
-    dict(type='Mosaic', img_scale=(n,n), pad_val=114.0, prob=1.0,
-         pre_transform=[dict(type='LoadImageFromFile'), dict(type='LoadAnnotations', with_bbox=True)]),
+    dict(type='Mosaic', img_scale=(n,n), pad_val=114.0, prob=1.0),
     dict(type='RandomAffine', scaling_ratio_range=(0.5,1.5), max_rotate_degree=0.0,
          max_shear_degree=0.0, max_translate_ratio=0.1, border=(-n//2,-n//2),
          border_val=(114.0,114.0,114.0)),
@@ -59,7 +58,7 @@ def make_cfg(args, dataset_root: Path, out: Path):
     cfg.pretrained_ckpt='/marimo/DynamicVis/checkpoints/pretrain_dynamicvis_b_bf16_mamba_epoch_200.pth'
     meta=dict(classes=('person',) if args.dataset=='tinyperson' else ('ship',))
     cfg.train_dataloader=dict(batch_size=8,num_workers=8,persistent_workers=True,sampler=dict(type='DefaultSampler',shuffle=True),
-        dataset=dict(type='CocoDataset',data_root=str(dataset_root),ann_file='annotations/train.json',data_prefix=dict(img=''),metainfo=meta,pipeline=PIPELINE(args.imgsz)))
+        dataset=dict(type='MultiImageMixDataset',dataset=dict(type='CocoDataset',data_root=str(dataset_root),ann_file='annotations/train.json',data_prefix=dict(img=''),metainfo=meta,pipeline=[dict(type='LoadImageFromFile'),dict(type='LoadAnnotations',with_bbox=True)]),pipeline=PIPELINE(args.imgsz)))
     cfg.val_dataloader=dict(batch_size=8,num_workers=8,persistent_workers=True,drop_last=False,sampler=dict(type='DefaultSampler',shuffle=False),
         dataset=dict(type='CocoDataset',data_root=str(dataset_root),ann_file='annotations/val.json',data_prefix=dict(img=''),metainfo=meta,test_mode=True,pipeline=EVAL(args.imgsz)))
     cfg.test_dataloader=cfg.val_dataloader
