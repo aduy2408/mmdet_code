@@ -325,7 +325,7 @@ def patch_config(cfg: Any, model: str, args: argparse.Namespace, dataset_out: Pa
             dict(type="LinearLR", start_factor=1.0 / 3, by_epoch=False, begin=0, end=500),
             dict(type="CosineAnnealingLR", T_max=args.epochs, by_epoch=True, begin=0, end=args.epochs),
         ]
-    if args.optimizer != "config_default":
+    if args.optimizer != "config_default" and args.patience > 0:
         cfg.custom_hooks = list(cfg.get("custom_hooks", [])) + [
             dict(type="EarlyStoppingHook", monitor="coco/bbox_mAP", rule="greater", patience=args.patience, min_delta=0.001)
         ]
