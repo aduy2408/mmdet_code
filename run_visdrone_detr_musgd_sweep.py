@@ -45,6 +45,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", default=DATA_ROOT)
     parser.add_argument("--rtdetr-root", default=RTDETR_ROOT)
+    parser.add_argument("--epochs", type=int, default=EPOCHS)
+    parser.add_argument("--patience", type=int, default=PATIENCE)
+    parser.add_argument("--workers", type=int, default=WORKERS)
+    parser.add_argument("--seed", type=int, default=TRAINING_SEED)
+    parser.add_argument("--split-seed", type=int, default=SPLIT_SEED)
+    parser.add_argument("--image-size", type=int, nargs=2, default=IMAGE_SIZE)
+    parser.add_argument("--nms-iou", type=float, default=NMS_IOU)
     parser.add_argument("--work-root", default="/marimo/mmdet_runs/visdrone_detr_musgd_sweep_30e")
     parser.add_argument("--dataset-out", default="/marimo/mmdet_runs/visdrone_detr_musgd_sweep_30e/data/visdrone2019_coco")
     parser.add_argument("--queue-manifest", default="/marimo/mmdet_runs/visdrone_detr_musgd_sweep_30e/queue_manifest.json")
@@ -76,18 +83,18 @@ def command_for(args: argparse.Namespace, variant: Variant, model: str) -> list[
         "--dataset-out", args.dataset_out,
         "--work-dir", str(work_dir),
         "--models", model,
-        "--epochs", str(EPOCHS),
-        "--early-stop-patience", str(PATIENCE),
+        "--epochs", str(args.epochs),
+        "--early-stop-patience", str(args.patience),
         "--lr", str(variant.lr),
         "--optimizer", "musgd",
         "--clip-grad-max-norm", str(variant.clip_grad_max_norm),
         "--variant-name", variant.name,
         "--batch-size", str(BATCH_SIZE),
-        "--workers", str(WORKERS),
-        "--image-size", str(IMAGE_SIZE[0]), str(IMAGE_SIZE[1]),
-        "--split-seed", str(SPLIT_SEED),
-        "--seed", str(TRAINING_SEED),
-        "--nms-iou", str(NMS_IOU),
+        "--workers", str(args.workers),
+        "--image-size", str(args.image_size[0]), str(args.image_size[1]),
+        "--split-seed", str(args.split_seed),
+        "--seed", str(args.seed),
+        "--nms-iou", str(args.nms_iou),
         "--hf-repo-id", args.hf_repo_id,
         "--remote-prefix", remote_prefix,
         "--upload-interval-hours", "1.0",
@@ -119,14 +126,14 @@ def main() -> None:
         },
         "variant_config_or_explicit_change": "MuSGD sweep over LR and gradient clip, 30 epochs, no early stopping",
         "dataset_root": args.data_root,
-        "split_seed": SPLIT_SEED,
-        "training_seed": TRAINING_SEED,
-        "image_size": list(IMAGE_SIZE),
+        "split_seed": args.split_seed,
+        "training_seed": args.seed,
+        "image_size": list(args.image_size),
         "batch_size": BATCH_SIZE,
-        "epochs": EPOCHS,
-        "patience": PATIENCE,
+        "epochs": args.epochs,
+        "patience": args.patience,
         "amp": False,
-        "nms_iou": NMS_IOU,
+        "nms_iou": args.nms_iou,
         "hf_repo": args.hf_repo_id,
         "upload_required": True,
         "jobs": jobs,
