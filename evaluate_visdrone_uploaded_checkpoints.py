@@ -59,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-yaml", default="matrix")
     parser.add_argument("--hf-repo-id", default=REPO)
     parser.add_argument("--nms-iou", type=float, default=0.5)
+    parser.add_argument("--models", default=",".join(RUNS))
     return parser.parse_args()
 
 
@@ -128,6 +129,34 @@ def normalize_predictions(raw: Any, annotation: Path) -> list[dict[str, Any]]:
     return output
 
 
+def prepare_eval_config(model: str, source: Path, run_dir: Path) -> Path:
+    config = source / "patched_config.py"
+    if model != "rtmdet":
+        return config
+    from mmengine.config import Config
+
+    cfg = Config.fromfile(str(config))
+
+    def patch(value: Any) -> None:
+        if isinstance(value, dict):
+            if value.get("type") in {"Resize", "RandomResize"}:
+                value["keep_ratio"] = False
+            for child in value.values():
+                patch(child)
+        elif isinstance(value, list):
+            for child in value:
+                patch(child)
+
+    patch(cfg.test_dataloader.dataset.pipeline)
+    preprocessor = cfg.model.get("data_preprocessor")
+    if isinstance(preprocessor, dict):
+        preprocessor["pad_size_divisor"] = 32
+        preprocessor["batch_augments"] = []
+    target = run_dir / "patched_config_eval.py"
+    cfg.dump(str(target))
+    return target
+
+
 def main() -> None:
     args = parse_args()
     token = os.environ.get("HF_TOKEN")
@@ -140,16 +169,20 @@ def main() -> None:
     annotation = args.data_root / "annotations" / "test.json"
     if not annotation.is_file():
         raise FileNotFoundError(f"Missing COCO test annotations: {annotation}")
+    selected_models = [model for model in args.models.split(",") if model]
+    unknown = sorted(set(selected_models) - set(RUNS))
+    if unknown:
+        raise ValueError(f"Unknown models: {unknown}")
     all_results: dict[str, Any] = {}
-    for model, seeds in RUNS.items():
-        for seed, prefix in seeds.items():
+    for model in selected_models:
+        for seed, prefix in RUNS[model].items():
             source = snapshot / prefix
-            config = source / "patched_config.py"
             checkpoints = sorted(source.glob("best_*.pth"))
             if not checkpoints:
                 raise FileNotFoundError(f"No checkpoint under {source}")
             run_dir = args.project / model / f"seed{seed}"
             run_dir.mkdir(parents=True, exist_ok=True)
+            config = prepare_eval_config(model, source, run_dir)
             result_pkl = run_dir / "predictions.pkl"
             env = os.environ.copy()
             env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
