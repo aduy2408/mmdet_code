@@ -66,6 +66,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--early-stop-patience", "--patience", dest="patience", type=int, default=15)
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument(
+        "--clip-grad-max-norm",
+        type=float,
+        default=35.0,
+        help="MuSGD gradient clip max norm for explicit MuSGD variants.",
+    )
+    parser.add_argument(
+        "--variant-name",
+        default="musgd_default",
+        help="Stable variant label recorded in the experiment manifest.",
+    )
+    parser.add_argument(
         "--optimizer",
         choices=("musgd", "config_default"),
         default="musgd",
@@ -308,7 +319,7 @@ def patch_config(cfg: Any, model: str, args: argparse.Namespace, dataset_out: Pa
                 type="MuSGD", lr=args.lr, momentum=0.9, nesterov=True,
                 weight_decay=0.0005, muon=0.2, sgd=1.0,
             ),
-            clip_grad=dict(max_norm=35, norm_type=2),
+            clip_grad=dict(max_norm=args.clip_grad_max_norm, norm_type=2),
         )
         cfg.param_scheduler = [
             dict(type="LinearLR", start_factor=1.0 / 3, by_epoch=False, begin=0, end=500),
@@ -348,9 +359,9 @@ def write_config(model: str, args: argparse.Namespace, dataset_out: Path, work_d
         if isinstance(component, dict):
             resolved_model[key] = component.get("type")
     manifest = {
-        "experiment_id": f"visdrone2019_{model}_seed{args.seed}",
+        "experiment_id": f"visdrone2019_{model}_{args.variant_name}_seed{args.seed}",
         "baseline": {"control_config_or_baseline_config": str(config_path), "model": model},
-        "variant": {"variant_config_or_explicit_change": "VisDrone COCO adapter + common MuSGD protocol", "patched_config": str(patched)},
+        "variant": {"variant_config_or_explicit_change": f"VisDrone COCO adapter + MuSGD sweep variant {args.variant_name}", "patched_config": str(patched)},
         "source_commit": source_commit(),
         "runner": str(Path(__file__).resolve()),
         "python_executable": args.python,
@@ -363,7 +374,8 @@ def write_config(model: str, args: argparse.Namespace, dataset_out: Path, work_d
         "resolved_model_components": resolved_model,
         "image_size": list(args.image_size), "batch_size": args.batch_size,
         "epochs": args.epochs, "patience": args.patience, "amp": args.amp,
-        "optimizer": {"type": "config_default" if args.optimizer == "config_default" else "MuSGD", "lr": args.lr if args.optimizer != "config_default" else "from_model_config"}, "workers": args.workers,
+        "optimizer": {"type": "config_default" if args.optimizer == "config_default" else "MuSGD", "lr": args.lr if args.optimizer != "config_default" else "from_model_config", "clip_grad_max_norm": args.clip_grad_max_norm if args.optimizer != "config_default" else "from_model_config"},
+        "variant_name": args.variant_name, "workers": args.workers,
         "nms_iou": args.nms_iou, "hf_repo": args.hf_repo_id or "unknown",
         "upload_interval_hours": args.upload_interval_hours,
         "remote_prefix": f"{args.remote_prefix}/{model}/seed{args.seed}",
@@ -476,10 +488,11 @@ def main() -> None:
     dataset_out = prepare_dataset(args)
     print(json.dumps({
         "control": {model: MODEL_CONFIGS[model] for model in args.models.split(",")},
-        "variant": "official VisDrone split + MuSGD + common runtime settings",
+        "variant": f"official VisDrone split + MuSGD sweep variant {args.variant_name}",
         "source_commit": source_commit(), "dataset_root": str(Path(args.data_root).expanduser().resolve()),
         "split_seed": args.split_seed, "training_seed": args.seed,
         "epochs": args.epochs, "patience": args.patience, "lr": args.lr,
+        "clip_grad_max_norm": args.clip_grad_max_norm, "variant_name": args.variant_name,
         "batch_size": args.batch_size, "workers": args.workers, "amp": args.amp,
         "nms_iou": args.nms_iou, "upload_required": True,
     }, indent=2))
