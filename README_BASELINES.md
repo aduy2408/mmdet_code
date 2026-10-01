@@ -4,6 +4,33 @@ This setup runs RetinaNet R50-FPN, Cascade R-CNN R50-FPN, and RTMDet-S on
 both datasets. The launchers also support MMDetection's DETR and DINO-DETR
 implementations through the `detr` and `dino` model names.
 
+## DynamicVis TinyPerson result from Hugging Face
+
+Source of truth: [`duyle2408/dynamicvis-baselines/tinyperson`](https://huggingface.co/datasets/duyle2408/dynamicvis-baselines/tree/main/tinyperson).
+
+The uploaded TinyPerson run contains `epoch_100.pth`, `resolved_config.py`,
+`experiment_manifest.json`, the generated dataset annotations, and the training
+log. The HF manifest records:
+
+```text
+seed: 42
+split seed: 42
+epochs: 100
+patience: 15
+batch size: 8
+workers: 8
+optimizer: MuSGD
+augmentation: Mosaic p=1.0 -> RandomAffine -> YOLOXHSVRandomAug -> flip -> Resize -> Pad
+NMS IoU: 0.5
+pretrained: pretrain_dynamicvis_b_bf16_mamba_epoch_200.pth
+```
+
+This artifact confirms training completion and upload, but it does **not**
+contain a verified `evaluation_metrics.json` or AP/mAP result. Do not report an
+accuracy number for this run until a post-training evaluation artifact is
+uploaded. The corresponding LevirShip run became numerically unstable with
+`NaN` classification loss and is not a valid result.
+
 ## Environment
 
 The notebook Python is not used for MMDetection. Install the environment first:

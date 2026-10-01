@@ -97,6 +97,16 @@ def normalize_predictions(raw: Any, annotation: Path) -> list[dict[str, Any]]:
         raw = raw["predictions"]
     for image_index, item in enumerate(raw):
         image_id = image_ids[image_index]
+        if isinstance(item, dict) and "pred_instances" in item:
+            instances = item["pred_instances"]
+            boxes = instances["bboxes"].detach().cpu().numpy()
+            scores = instances["scores"].detach().cpu().numpy()
+            labels = instances["labels"].detach().cpu().numpy()
+            image_id = int(item.get("img_id", image_id))
+            for box, score, label in zip(boxes, scores, labels):
+                x1, y1, x2, y2 = map(float, box)
+                output.append({"image_id": image_id, "category_id": int(label) + 1, "bbox": [x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)], "score": float(score)})
+            continue
         if hasattr(item, "pred_instances"):
             instances = item.pred_instances
             boxes = instances.bboxes.detach().cpu().numpy()
