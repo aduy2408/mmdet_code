@@ -135,6 +135,10 @@ def prepare_eval_config(model: str, source: Path, run_dir: Path) -> Path:
         return config
     from mmengine.config import Config
 
+    import sys
+    for path in ("/marimo/mmdet_code", "/marimo/mmdet_code/mmdetection"):
+        if path not in sys.path:
+            sys.path.insert(0, path)
     cfg = Config.fromfile(str(config))
 
     def patch(value: Any) -> None:
