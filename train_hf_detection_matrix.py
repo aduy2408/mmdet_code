@@ -128,16 +128,18 @@ def coco_ground_truth(samples: tuple[DetectionSample, ...], label_names: tuple[s
 
 
 @torch.no_grad()
-def predict(model, processor, loader, device, threshold: float):
+def predict(model, processor, loader, device, threshold: float, image_size: int):
     model.eval()
     detections = []
     for batch in loader:
         outputs = model(pixel_values=batch["pixel_values"].to(device), pixel_mask=batch["pixel_mask"].to(device))
-        target_sizes = torch.tensor(batch["original_sizes"], device=device)
-        results = processor.post_process_object_detection(outputs, threshold=threshold, target_sizes=target_sizes)
-        for image_id, result in zip(batch["image_ids"], results):
+        transformed_sizes = torch.tensor([(image_size, image_size)] * len(batch["image_ids"]), device=device)
+        results = processor.post_process_object_detection(outputs, threshold=threshold, target_sizes=transformed_sizes)
+        for image_id, original_size, result in zip(batch["image_ids"], batch["original_sizes"], results):
+            original_height, original_width = original_size
+            scale = min(image_size / original_width, image_size / original_height)
             for score, label, box in zip(result["scores"].cpu().tolist(), result["labels"].cpu().tolist(), result["boxes"].cpu().tolist()):
-                x1, y1, x2, y2 = box
+                x1, y1, x2, y2 = [float(value) / scale for value in box]
                 detections.append({"image_id": int(image_id), "category_id": int(label) + 1, "bbox": [x1, y1, max(0.0, x2 - x1), max(0.0, y2 - y1)], "score": float(score)})
     return detections
 
@@ -316,7 +318,7 @@ def main():
                 scheduler.step()
         if not scheduler_per_step:
             scheduler.step()
-        val_metrics = evaluate(bundle.splits["val"], bundle.label_names, predict(model, processor, val_loader, device, args.score_threshold), output_dir, "val")
+        val_metrics = evaluate(bundle.splits["val"], bundle.label_names, predict(model, processor, val_loader, device, args.score_threshold, args.image_size), output_dir, "val")
         print(f"epoch={epoch} loss={sum(losses)/max(1,len(losses)):.4f} val_map={val_metrics['map_50_95']:.4f}", flush=True)
         if val_metrics["map_50_95"] > best_map or not checkpoint.exists():
             best_map = val_metrics["map_50_95"]; stale = 0; model.save_pretrained(checkpoint); processor.save_pretrained(checkpoint)
@@ -324,7 +326,7 @@ def main():
             stale += 1
             if stale >= args.patience: break
     model = model_cls.from_pretrained(checkpoint); model.to(device)
-    test_metrics = evaluate(bundle.splits["test"], bundle.label_names, predict(model, processor, test_loader, device, args.score_threshold), output_dir, "test")
+    test_metrics = evaluate(bundle.splits["test"], bundle.label_names, predict(model, processor, test_loader, device, args.score_threshold, args.image_size), output_dir, "test")
     result = {"dataset": args.dataset, "model": model_info["model_id"], "variant": args.variant, "seed": args.seed, "test": test_metrics}
     (output_dir / "final_results.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     if args.upload_required:
