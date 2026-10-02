@@ -178,8 +178,11 @@ def parse_args():
     parser.add_argument("--image-size", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=0)
     parser.add_argument("--workers", type=int, default=-1)
+    parser.add_argument("--optimizer", choices=("musgd", "adamw"), default="musgd")
     parser.add_argument("--learning-rate", type=float, default=0.01)
+    parser.add_argument("--backbone-learning-rate", type=float, default=1e-5)
     parser.add_argument("--weight-decay", type=float, default=0.0005)
+    parser.add_argument("--warmup-steps", type=int, default=0)
     parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--muon", type=float, default=0.2)
     parser.add_argument("--sgd-scale", type=float, default=1.0)
@@ -193,6 +196,49 @@ def parse_args():
     parser.add_argument("--amp", action="store_true")
     parser.add_argument("--smoke-test", action="store_true")
     return parser.parse_args()
+
+
+def build_optimizer(model, args):
+    if args.optimizer == "adamw":
+        backbone, other = [], []
+        for name, parameter in model.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            (backbone if "backbone" in name else other).append(parameter)
+        return torch.optim.AdamW(
+            [
+                {"params": other, "lr": args.learning_rate},
+                {"params": backbone, "lr": args.backbone_learning_rate},
+            ],
+            lr=args.learning_rate,
+            weight_decay=args.weight_decay,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+        )
+    return MuSGD(
+        model.parameters(),
+        lr=args.learning_rate,
+        momentum=args.momentum,
+        weight_decay=args.weight_decay,
+        nesterov=True,
+        muon=args.muon,
+        sgd=args.sgd_scale,
+    )
+
+
+def build_scheduler(optimizer, args, steps_per_epoch: int):
+    if args.optimizer != "adamw":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, args.epochs)), False
+    total_steps = max(1, args.epochs * steps_per_epoch)
+    warmup_steps = min(max(0, args.warmup_steps), total_steps)
+
+    def schedule(step: int) -> float:
+        if warmup_steps and step < warmup_steps:
+            return max(1e-3, (step + 1) / warmup_steps)
+        progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+        return 0.5 * (1.0 + torch.cos(torch.tensor(progress * torch.pi)).item())
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, schedule), True
 
 
 def main():
@@ -222,10 +268,20 @@ def main():
     test_set = HFDetectionDataset(bundle.splits["test"], processor, args.image_size, train=False, mosaic=False, num_labels=bundle.num_labels, mosaic_close_epoch=0)
     loader = lambda dataset, shuffle: DataLoader(dataset, batch_size=args.batch_size if shuffle else 1, shuffle=shuffle, num_workers=args.workers, pin_memory=device.type == "cuda", collate_fn=collate_fn)
     train_loader, val_loader, test_loader = loader(train_set, True), loader(val_set, False), loader(test_set, False)
-    manifest = {"experiment_id": f"hf_{args.dataset}_{args.model}_{args.variant}_seed{args.seed}", "baseline": "dataset-specific baseline protocol", "variant": args.variant, "runner": "mmdetection/train_hf_detection_matrix.py", "python_executable": sys.executable, "dataset_root": str(Path(args.data_root).resolve()), "split_seed": args.split_seed, "training_seed": args.seed, "model": model_info["model_cls"], "model_id": model_info["model_id"], "backbone": model_info["backbone"], "image_size": args.image_size, "batch_size": args.batch_size, "workers": args.workers, "epochs": args.epochs, "patience": args.patience, "optimizer": {"type": "MuSGD", "lr": args.learning_rate, "momentum": args.momentum, "weight_decay": args.weight_decay, "muon": args.muon, "sgd": args.sgd_scale}, "hf_repo": args.hf_repo_id, "remote_prefix": args.remote_prefix, "upload_required": args.upload_required}
+    optimizer_info = {
+        "type": "AdamW" if args.optimizer == "adamw" else "MuSGD",
+        "lr": args.learning_rate,
+        "backbone_lr": args.backbone_learning_rate if args.optimizer == "adamw" else None,
+        "weight_decay": args.weight_decay,
+        "warmup_steps": args.warmup_steps if args.optimizer == "adamw" else 0,
+        "momentum": args.momentum if args.optimizer == "musgd" else None,
+        "muon": args.muon if args.optimizer == "musgd" else None,
+        "sgd": args.sgd_scale if args.optimizer == "musgd" else None,
+    }
+    manifest = {"experiment_id": f"hf_{args.dataset}_{args.model}_{args.variant}_seed{args.seed}", "baseline": "dataset-specific baseline protocol", "variant": args.variant, "runner": "mmdetection/train_hf_detection_matrix.py", "python_executable": sys.executable, "dataset_root": str(Path(args.data_root).resolve()), "split_seed": args.split_seed, "training_seed": args.seed, "model": model_info["model_cls"], "model_id": model_info["model_id"], "backbone": model_info["backbone"], "image_size": args.image_size, "batch_size": args.batch_size, "workers": args.workers, "epochs": args.epochs, "patience": args.patience, "optimizer": optimizer_info, "grad_clip": args.grad_clip, "amp": args.amp, "hf_repo": args.hf_repo_id, "remote_prefix": args.remote_prefix, "upload_required": args.upload_required}
     (output_dir / "experiment_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    optimizer = MuSGD(model.parameters(), lr=args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay, nesterov=True, muon=args.muon, sgd=args.sgd_scale)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(1, args.epochs))
+    optimizer = build_optimizer(model, args)
+    scheduler, scheduler_per_step = build_scheduler(optimizer, args, len(train_loader))
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
     best_map, stale = -1.0, 0
     checkpoint = output_dir / "best"
@@ -256,7 +312,10 @@ def main():
                     optimizer.zero_grad(set_to_none=True)
                     continue
             scaler.step(optimizer); scaler.update(); losses.append(float(outputs.loss.detach().cpu()))
-        scheduler.step()
+            if scheduler_per_step:
+                scheduler.step()
+        if not scheduler_per_step:
+            scheduler.step()
         val_metrics = evaluate(bundle.splits["val"], bundle.label_names, predict(model, processor, val_loader, device, args.score_threshold), output_dir, "val")
         print(f"epoch={epoch} loss={sum(losses)/max(1,len(losses)):.4f} val_map={val_metrics['map_50_95']:.4f}", flush=True)
         if val_metrics["map_50_95"] > best_map or not checkpoint.exists():
@@ -272,7 +331,6 @@ def main():
         upload_artifacts(output_dir, args.hf_repo_id, args.remote_prefix)
         result["upload"] = {"repo_id": args.hf_repo_id, "remote_prefix": args.remote_prefix}
         (output_dir / "final_results.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
-        upload_artifacts(output_dir, args.hf_repo_id, args.remote_prefix)
     print(json.dumps(result, indent=2))
 
 
