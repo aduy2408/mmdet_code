@@ -54,6 +54,7 @@ def parse_args():
     parser.add_argument("--server-index", type=int, choices=(1, 2, 3), required=True)
     parser.add_argument("--work-root", default="/marimo/hf_runs/native_matrix")
     parser.add_argument("--state-file", required=True)
+    parser.add_argument("--remote-prefix-root", default="native")
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--patience", type=int, default=15)
     parser.add_argument("--split-seed", type=int, default=42)
@@ -129,7 +130,7 @@ def run_job(job: Job, args, repo: Path, run_root: Path):
         "--grad-clip", "0.1",
         "--output-dir", str(run),
         "--hf-repo-id", REPO_ID,
-        "--remote-prefix", f"native/server{args.server_index}/{job.dataset}/{job.variant}/{job.model}/seed{job.seed}",
+        "--remote-prefix", f"{args.remote_prefix_root}/server{args.server_index}/{job.dataset}/{job.variant}/{job.model}/seed{job.seed}",
         "--upload-required",
     ]
     env = {
