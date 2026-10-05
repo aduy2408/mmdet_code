@@ -32,6 +32,7 @@ MODEL_CONFIGS = {
     "rtmdet": "configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",
     "detr": "configs/detr/detr_r50_8xb2-150e_coco.py",
     "detr_r18": "configs/detr/detr_r18_8xb2-500e_coco.py",
+    "deformable_detr_r50": "configs/deformable_detr/deformable-detr_r50_16xb2-50e_coco.py",
     "rtdetr_r18": "configs/rtdetr/rtdetr_r18vd_8xb2-72e_coco.py",
     "dino": "configs/dino/dino-4scale_r50_8xb2-12e_coco.py",
 }
@@ -379,7 +380,7 @@ def patch_config(
         min_delta=0.001,
     ))
     cfg.optim_wrapper.optimizer = dict(
-        type="MuSGD", lr=0.01, momentum=0.9, nesterov=True,
+        type="MuSGD", lr=0.0001, momentum=0.9, nesterov=True,
         weight_decay=0.0005, muon=0.2, sgd=1.0,
     )
     if model_name == "rtmdet":

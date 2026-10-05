@@ -50,6 +50,7 @@ MODEL_CONFIGS = {
     "fcos": "configs/fcos/fcos_r50-caffe_fpn_gn-head_1x_coco.py",
     "rtmdet": "configs/rtmdet/rtmdet_s_8xb32-300e_coco.py",
     "detr_r18": "configs/detr/detr_r18_8xb2-500e_coco.py",
+    "deformable_detr_r50": "configs/deformable_detr/deformable-detr_r50_16xb2-50e_coco.py",
     "rtdetr_r18": "configs/rtdetr/rtdetr_r18vd_8xb2-72e_coco.py",
     "reppoints": "configs/reppoints/reppoints-moment_r50_fpn-gn_head-gn_1x_coco.py",
 }
@@ -498,7 +499,7 @@ def apply_yolo_protocol(
     cfg.optim_wrapper = deepcopy(cfg.get("optim_wrapper", {}))
     cfg.optim_wrapper.optimizer = dict(
         type="MuSGD",
-        lr=0.01,
+        lr=0.0001,
         momentum=0.9,
         nesterov=True,
         weight_decay=0.0005,
