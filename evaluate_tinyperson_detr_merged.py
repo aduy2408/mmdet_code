@@ -190,6 +190,10 @@ def run_one(args: argparse.Namespace, spec: dict[str, Any], split: str, config: 
         str(args.code_root / "mmdetection"),
         "/marimo/rtdetr-mmdet",
     ])
+    env["PATH"] = "/marimo/mmdet-venv/bin:/usr/bin:/bin"
+    env["VIRTUAL_ENV"] = "/marimo/mmdet-venv"
+    env["PYTHONHOME"] = ""
+    env["PYTHONNOUSERSITE"] = "1"
     env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
     cmd = [
         args.python,
