@@ -107,7 +107,7 @@ def patch_config(
     cfg = Config.fromfile(str(source_config))
     cfg.load_from = None
     corner_ann = (
-        split_paths["val_corner"] if split == "validation" else data_root / "annotations/corner/task/tiny_set_test_sw640_sh512_all.json"
+        split_paths["val"] if split == "validation" else data_root / "annotations/corner/task/tiny_set_test_sw640_sh512_all.json"
     )
     merged_ann = (
         split_paths["val_merged"] if split == "validation" else data_root / "annotations/task/tiny_set_test_all.json"
@@ -183,7 +183,7 @@ def main() -> None:
             cfg_path = run_dir / f"{split}_config.py"
             patch_config(spec["config"], cfg_path, split, split_paths, args.data_root, split_dir)
             record = run_one(args, spec, split, cfg_path, split_dir)
-            corner_ann = split_paths["val_corner"] if split == "validation" else args.data_root / "annotations/corner/task/tiny_set_test_sw640_sh512_all.json"
+            corner_ann = split_paths["val"] if split == "validation" else args.data_root / "annotations/corner/task/tiny_set_test_sw640_sh512_all.json"
             merged_ann = split_paths["val_merged"] if split == "validation" else args.data_root / "annotations/task/tiny_set_test_all.json"
             merged_result = split_dir / "merged_detections.json"
             prepared_gt = split_dir / "prepared_ground_truth.json"
@@ -209,7 +209,7 @@ def main() -> None:
             "python_executable": args.python,
             "dataset_root": str(args.data_root),
             "nms_iou": args.nms_iou,
-            "validation_corner_gt": str(split_paths["val_corner"]),
+            "validation_corner_gt": str(split_paths["val"]),
             "validation_merged_gt": str(split_paths["val_merged"]),
             "test_corner_gt": str(args.data_root / "annotations/corner/task/tiny_set_test_sw640_sh512_all.json"),
             "test_merged_gt": str(args.data_root / "annotations/task/tiny_set_test_all.json"),
