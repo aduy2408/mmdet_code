@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pickle
 import re
 import subprocess
 from pathlib import Path
@@ -126,13 +127,47 @@ def patch_config(
     (result_dir / "merged_ground_truth.json").write_text(str(merged_ann), encoding="utf-8")
 
 
+def predictions_to_coco(pickle_path: Path, output: Path) -> Path:
+    predictions = pickle.loads(pickle_path.read_bytes())
+    output_rows = []
+    for sample in predictions:
+        instances = sample["pred_instances"]
+        boxes = instances["bboxes"]
+        scores = instances["scores"]
+        labels = instances["labels"]
+        if hasattr(boxes, "detach"):
+            boxes = boxes.detach().cpu().tolist()
+            scores = scores.detach().cpu().tolist()
+            labels = labels.detach().cpu().tolist()
+        width = float(sample["ori_shape"][1])
+        height = float(sample["ori_shape"][0])
+        for box, score, label in zip(boxes, scores, labels):
+            x1, y1, x2, y2 = box
+            x1 = max(0.0, min(float(x1), width))
+            y1 = max(0.0, min(float(y1), height))
+            x2 = max(x1, min(float(x2), width))
+            y2 = max(y1, min(float(y2), height))
+            output_rows.append({
+                "image_id": int(sample["img_id"]),
+                "bbox": [x1, y1, x2 - x1, y2 - y1],
+                "score": float(score),
+                "category_id": int(label) + 1,
+            })
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(output_rows), encoding="utf-8")
+    return output
+
+
 def find_prediction_json(result_dir: Path) -> Path:
     candidates = sorted(result_dir.glob("predictions*.bbox.json"))
     if not candidates:
         candidates = sorted(result_dir.glob("*.bbox.json"))
-    if not candidates:
-        raise FileNotFoundError(f"No COCO bbox JSON under {result_dir}")
-    return candidates[0]
+    if candidates:
+        return candidates[0]
+    pickle_path = result_dir / "predictions.pkl"
+    if pickle_path.is_file():
+        return predictions_to_coco(pickle_path, result_dir / "predictions_bbox.json")
+    raise FileNotFoundError(f"No predictions.pkl or COCO bbox JSON under {result_dir}")
 
 
 def run_one(args: argparse.Namespace, spec: dict[str, Any], split: str, config: Path, out: Path) -> dict[str, Any]:
@@ -155,10 +190,11 @@ def run_one(args: argparse.Namespace, spec: dict[str, Any], split: str, config: 
         "--out",
         str(out / "predictions.pkl"),
     ]
-    with log.open("w", encoding="utf-8") as handle:
-        proc = subprocess.run(cmd, cwd=spec["runtime"], env=env, stdout=handle, stderr=subprocess.STDOUT, text=True)
-    if proc.returncode:
-        raise RuntimeError(f"inference failed for {spec['model']}/seed{spec['seed']}/{split}; see {log}")
+    if not (out / "predictions.pkl").is_file():
+        with log.open("w", encoding="utf-8") as handle:
+            proc = subprocess.run(cmd, cwd=spec["runtime"], env=env, stdout=handle, stderr=subprocess.STDOUT, text=True)
+        if proc.returncode:
+            raise RuntimeError(f"inference failed for {spec['model']}/seed{spec['seed']}/{split}; see {log}")
     return {"command": cmd, "log": str(log), "prediction_json": str(find_prediction_json(out))}
 
 
