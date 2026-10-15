@@ -184,7 +184,11 @@ def find_prediction_json(result_dir: Path) -> Path:
 def run_one(args: argparse.Namespace, spec: dict[str, Any], split: str, config: Path, out: Path) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     log = out / "evaluation.log"
-    env = os.environ.copy()
+    env = {
+        key: os.environ[key]
+        for key in ("HOME", "LANG", "LC_ALL", "CUDA_VISIBLE_DEVICES", "HF_HOME", "HF_HUB_CACHE")
+        if key in os.environ
+    }
     env["PYTHONPATH"] = os.pathsep.join([
         "/marimo/rtdetr-mmdet",
         str(args.code_root),
