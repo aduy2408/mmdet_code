@@ -152,7 +152,7 @@ def main() -> None:
     selected_protocols = {x for x in args.protocols.split(",") if x}
     if not selected_models <= MODELS or not selected_protocols <= PROTOCOLS:
         raise ValueError("Unknown model or protocol")
-    if not selected_seeds <= SOURCE_REPOS:
+    if not selected_seeds <= set(SOURCE_REPOS):
         raise ValueError(f"Only source seeds are available: {sorted(SOURCE_REPOS)}")
 
     snapshots: dict[int, Path] = {}
