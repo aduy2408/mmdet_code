@@ -186,9 +186,9 @@ def run_one(args: argparse.Namespace, spec: dict[str, Any], split: str, config: 
     log = out / "evaluation.log"
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join([
+        "/marimo/rtdetr-mmdet",
         str(args.code_root),
         str(args.code_root / "mmdetection"),
-        "/marimo/rtdetr-mmdet",
     ])
     env["PATH"] = "/marimo/mmdet-venv/bin:/usr/bin:/bin"
     env["VIRTUAL_ENV"] = "/marimo/mmdet-venv"
