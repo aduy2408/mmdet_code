@@ -122,3 +122,12 @@ This section is separate from the older native MMDetection evaluation above. It 
 | Test merged | 0.198731 ± 0.001612 | 0.543373 ± 0.002875 | 0.617713 ± 0.008406 | 0.100272 ± 0.000798 | 0.183794 ± 0.000161 | 0.272956 ± 0.003552 | 0.317017 ± 0.001721 | 0.523246 ± 0.000879 | 0.593403 ± 0.002806 |
 
 The merged artifacts are independently stored as `evaluation_metrics.json`, `evaluation_manifest.json`, and `evaluation_records.json` for each seed. These merged results must not be mixed with the older native-corner rows above.
+
+### Deformable DETR R50 merged metrics
+
+The Deformable DETR R50 merged artifacts are also verified in the same HF repository under `tinyperson_detr_merged_eval/deformable_detr_r50/seed{seed}`.
+
+| Split | mAP50-95 | AP50 | AP50-Small | AP75 | AP-small | AP-medium | AP50-Tiny1 | AP50-Tiny2 | AP50-Tiny3 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Val merged | 0.081208 ± 0.002617 | 0.287814 ± 0.022071 | 0.459064 ± 0.048435 | 0.018891 ± 0.001286 | 0.063682 ± 0.003332 | 0.228504 ± 0.009366 | 0.067370 ± 0.005346 | 0.211337 ± 0.032028 | 0.299236 ± 0.000822 |
+| Test merged | 0.077243 ± 0.004549 | 0.284763 ± 0.014770 | 0.465016 ± 0.029392 | 0.015907 ± 0.001196 | 0.063721 ± 0.005018 | 0.174428 ± 0.003356 | 0.054059 ± 0.003861 | 0.144455 ± 0.010906 | 0.329791 ± 0.022411 |
