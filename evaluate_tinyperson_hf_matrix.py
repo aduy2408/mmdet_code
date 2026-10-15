@@ -33,7 +33,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--code-root", type=Path, default=Path("/marimo/mmdet_code"))
     parser.add_argument("--data-root", type=Path, default=Path("/marimo/TinyPerson"))
     parser.add_argument("--output-repo-id", required=True)
+    parser.add_argument("--hf-repo-id", default="")
     parser.add_argument("--split-seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--patience", type=int, default=0)
+    parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--model-yaml", default="evaluation-only")
     parser.add_argument("--nms-iou", type=float, default=0.5)
     parser.add_argument("--models", default=",".join(sorted(MODELS)))
     parser.add_argument("--seeds", default="42,43")
@@ -135,6 +141,8 @@ def find_native_metrics(split_dir: Path) -> dict[str, float]:
 
 def main() -> None:
     args = parse_args()
+    if args.hf_repo_id:
+        args.output_repo_id = args.hf_repo_id
     token = os.environ.get("HF_TOKEN")
     if not token:
         raise RuntimeError("HF_TOKEN is required in the detached Marimo child environment")
