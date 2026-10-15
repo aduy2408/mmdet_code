@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import pickle
@@ -116,6 +117,11 @@ def patch_config(
     )
     loader_key = "val_dataloader" if split == "validation" else "test_dataloader"
     evaluator_key = "val_evaluator" if split == "validation" else "test_evaluator"
+    if split == "validation":
+        cfg.test_dataloader = copy.deepcopy(cfg.val_dataloader)
+        cfg.test_evaluator = copy.deepcopy(cfg.val_evaluator)
+        loader_key = "test_dataloader"
+        evaluator_key = "test_evaluator"
     cfg[loader_key].dataset.ann_file = str(corner_ann)
     cfg[loader_key].dataset.data_root = ""
     cfg[loader_key].dataset.data_prefix.img = str(data_root / "erase_with_uncertain_dataset/train") + "/"
