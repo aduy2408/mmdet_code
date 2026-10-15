@@ -132,6 +132,7 @@ def patch_config(
     )
     cfg[evaluator_key].ann_file = str(corner_ann)
     cfg[evaluator_key].outfile_prefix = str(result_dir / "predictions")
+    cfg.train_dataloader = copy.deepcopy(cfg[loader_key])
     cfg.work_dir = str(result_dir)
     output.parent.mkdir(parents=True, exist_ok=True)
     cfg.dump(str(output))
