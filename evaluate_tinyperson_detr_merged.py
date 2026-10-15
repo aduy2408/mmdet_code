@@ -104,6 +104,7 @@ def patch_config(
     data_root: Path,
     result_dir: Path,
 ) -> None:
+    result_dir.mkdir(parents=True, exist_ok=True)
     cfg = Config.fromfile(str(source_config))
     cfg.load_from = None
     corner_ann = (
