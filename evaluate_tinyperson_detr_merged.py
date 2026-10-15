@@ -65,6 +65,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hf-repo-id", default="")
     p.add_argument("--split-seed", type=int, default=42)
     p.add_argument("--nms-iou", type=float, default=0.5)
+    p.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     return p.parse_args()
 
 
@@ -217,10 +218,19 @@ def main() -> None:
         args.output_repo_id = args.hf_repo_id
     args.project.mkdir(parents=True, exist_ok=True)
     split_paths = prepare_val_split(args.data_root, args.project / "data" / "tinyperson" / "seed42")
+    selected = {key: spec for key, spec in SOURCE.items() if key[0] in args.models}
+    original_source = SOURCE.copy()
+    SOURCE.clear()
+    SOURCE.update(selected)
     sources = download_sources(args, token)
+    SOURCE.clear()
+    SOURCE.update(original_source)
     api = HfApi(token=token)
     api.create_repo(repo_id=args.output_repo_id, repo_type="dataset", exist_ok=True, private=False)
     summary: dict[str, Any] = {}
+    prior_summary = args.project / "summary.json"
+    if prior_summary.is_file():
+        summary.update(json.loads(prior_summary.read_text(encoding="utf-8")))
     for (model, seed), spec in sources.items():
         run_dir = args.project / "runs" / model / f"seed{seed}"
         split_metrics: dict[str, Any] = {}
