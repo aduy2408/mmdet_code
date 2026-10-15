@@ -94,7 +94,7 @@ def download_sources(args: argparse.Namespace, token: str) -> dict[tuple[str, in
             token=token,
             local_dir=str(out),
         )
-        downloaded[key] = {**spec, "checkpoint": Path(ckpt), "config": Path(config)}
+        downloaded[key] = {**spec, "model": key[0], "seed": key[1], "checkpoint": Path(ckpt), "config": Path(config)}
     return downloaded
 
 
