@@ -124,7 +124,11 @@ def patch_config(
         evaluator_key = "test_evaluator"
     cfg[loader_key].dataset.ann_file = str(corner_ann)
     cfg[loader_key].dataset.data_root = ""
-    cfg[loader_key].dataset.data_prefix.img = str(data_root / "erase_with_uncertain_dataset/train") + "/"
+    cfg[loader_key].dataset.data_prefix.img = (
+        str(data_root / "erase_with_uncertain_dataset/train") + "/"
+        if split == "validation"
+        else str(data_root / "test") + "/"
+    )
     cfg[evaluator_key].ann_file = str(corner_ann)
     cfg[evaluator_key].outfile_prefix = str(result_dir / "predictions")
     cfg.work_dir = str(result_dir)
