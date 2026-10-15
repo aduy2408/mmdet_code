@@ -92,3 +92,33 @@ Metrics use the MMDetection COCO bbox evaluator. `AP50-Small` is computed separa
 - `AP-large = -1.0000` for Varroa and LEVIR-Ship follows the COCO evaluator convention when that area bucket is unavailable. It is not a negative measured AP.
 - These are COCO bbox metrics from the evaluation checkpoint artifacts. They should not be pooled across datasets or treated as a cross-dataset leaderboard because dataset protocols and object-size distributions differ.
 - The report records the six standard COCO metrics available from the evaluator. Dataset-specific extra metrics are not inferred when they were not emitted by the evaluation path.
+
+## TinyPerson merged-corner re-evaluation on October 15, 2026
+
+This section is separate from the older native MMDetection evaluation above. It evaluates the archived TinyPerson checkpoints on both validation and test corner windows, then merges corner-window detections back to source-image coordinates before scoring. No retraining was performed.
+
+- Evaluator commit: `59fad320cdfd8294cc27036d0c2b2f111ca2e96e`
+- RT-DETR runtime commit: `66365c1553ffd121ca4ee2be9d091735faf3c182`
+- Split seed: `42`; checkpoint seeds: `42`, `43`
+- NMS IoU: `0.5`
+- HF dataset repository: `duyle2408/tinyperson-detr-merged-eval-20261015-runs`
+- Remote prefix: `tinyperson_detr_merged_eval/rtdetr_r18/seed{seed}`
+- HF verification: all six RT-DETR per-run files plus `summary.json` present, no missing paths.
+
+### RT-DETR R18 per-seed merged metrics
+
+| Seed | Split | mAP50-95 | AP50 | AP50-Small | AP75 | AP-small | AP-medium | AP50-Tiny1 | AP50-Tiny2 | AP50-Tiny3 |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 42 | Val merged | 0.241436 | 0.610152 | 0.682263 | 0.147049 | 0.212474 | 0.395240 | 0.377536 | 0.611200 | 0.636824 |
+| 43 | Val merged | 0.240350 | 0.608427 | 0.678653 | 0.135165 | 0.212187 | 0.395658 | 0.362757 | 0.622015 | 0.633923 |
+| 42 | Test merged | 0.199871 | 0.545406 | 0.623657 | 0.100836 | 0.183680 | 0.275467 | 0.315801 | 0.523867 | 0.591419 |
+| 43 | Test merged | 0.197591 | 0.541340 | 0.611770 | 0.099708 | 0.183907 | 0.270444 | 0.318234 | 0.522625 | 0.595387 |
+
+### RT-DETR R18 merged mean ± standard deviation across seeds
+
+| Split | mAP50-95 | AP50 | AP50-Small | AP75 | AP-small | AP-medium | AP50-Tiny1 | AP50-Tiny2 | AP50-Tiny3 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Val merged | 0.240893 ± 0.000768 | 0.609289 ± 0.001220 | 0.680458 ± 0.002553 | 0.141107 ± 0.008403 | 0.212331 ± 0.000204 | 0.395449 ± 0.000296 | 0.370147 ± 0.010450 | 0.616608 ± 0.007648 | 0.635374 ± 0.002051 |
+| Test merged | 0.198731 ± 0.001612 | 0.543373 ± 0.002875 | 0.617713 ± 0.008406 | 0.100272 ± 0.000798 | 0.183794 ± 0.000161 | 0.272956 ± 0.003552 | 0.317017 ± 0.001721 | 0.523246 ± 0.000879 | 0.593403 ± 0.002806 |
+
+The merged artifacts are independently stored as `evaluation_metrics.json`, `evaluation_manifest.json`, and `evaluation_records.json` for each seed. These merged results must not be mixed with the older native-corner rows above.
