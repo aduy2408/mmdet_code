@@ -165,6 +165,7 @@ def main():
         raise ValueError("Native matrix requires epochs=100, patience=15, split_seed=42")
     if not os.environ.get("HF_TOKEN"):
         raise RuntimeError("HF_TOKEN must come from live Marimo globals")
+        raise ValueError("This queue requires epochs=100, patience=0, split-seed=42")
     repo = Path(__file__).resolve().parent
     jobs = [job for index, job in enumerate(all_jobs()) if index % 3 == args.server_index - 1]
     root = Path(args.work_root)
