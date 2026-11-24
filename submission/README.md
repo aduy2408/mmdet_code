@@ -1,19 +1,21 @@
 # Submission code map
 
-Branch: `submission`. This repository remains the MMDetection base. The curated entrypoints below reference the existing source files; the full MMDetection base and required project directories remain available.
+Branch: `submission`. This folder is the self-contained MMDetection submission payload; the base framework and required runners are physically copied here.
 
-Datasets: Varroa, LEVIR-Ship, TinyPerson. Split seed: `42`. Dataset roots, checkpoints, `work_dirs/`, caches, and uploaded artifacts are runtime inputs and are not submission source.
+## Included payload
 
-| Area | Canonical source |
+| Area | Submission source |
 |---|---|
-| MMDetection baselines | `train_all_mmdet.py`, `train_all_levir_baseline.py`, `train_all_tinyperson_baseline.py`, `run_two_server_baselines.py` |
-| Baseline evaluation | `evaluate_coco_metrics.py`, `evaluate_coco_area_metrics.py`, `evaluate_missing_baseline_metrics.py` |
-| FCOS-SET (maintained MMDetection 3.x port) | `run_set_fcos_mmdet3_queue.py`, `projects/set/`, `mmdetection/configs/set/` |
-| STW-matched protocol | `run_set_stw_protocol_queue.py` (FCOS-SET protocol, not an STW architecture) |
-| TPH-YOLO / STW-YOLO | External YOLO backends; see `yolo_related/submission/` and `other_repo/` |
-| SR-TOD | `train_srtod_mmdet.py`, `setup_srtod_datasets.py`, `srtod_setup/`, `SR-TOD/` |
-| Marimo connection | `utils/marimo_ops.py`, `docs/local_github_marimo_workflow.md` |
+| MMDetection base | `submission/mmdetection/` |
+| Baseline training across Varroa/LEVIR-Ship/TinyPerson | `submission/train_all_mmdet.py`, `submission/train_all_levir_baseline.py`, `submission/train_all_tinyperson_baseline.py`, `submission/run_two_server_baselines.py` |
+| FCOS-SET and STW protocol | `submission/run_set_fcos_mmdet3_queue.py`, `submission/run_set_stw_protocol_queue.py`, `submission/projects/` |
+| SR-TOD | `submission/train_srtod_mmdet.py`, `submission/setup_srtod_datasets.py`, `submission/srtod_setup/`, `submission/SR-TOD/` |
+| DETR/RT-DETR | `submission/run_detr_r18_rtdetr_r18_matrix.py`, `submission/run_detr_r18_rtdetr_r18_two_server.py` |
+| Baseline/SOTA evaluation | `submission/evaluate_coco_metrics.py`, `submission/evaluate_coco_area_metrics.py`, `submission/evaluate_missing_baseline_metrics.py`, `submission/evaluate_tinyperson_metrics.py` |
+| Python entrypoints | `submission/train/*.py`, `submission/evaluate/*.py` |
+| Marimo workflow | `submission/utils/`, `submission/docs/`, `submission/marimo/` |
+| CI/CD map | `submission/ci_cd/` |
 
-Submission Python entrypoints live in `train/*.py` and `evaluate/*.py`; each delegates to the canonical source above without duplicating the MMDetection base. Run them with `/marimo/mmdet-venv/bin/python` through the repository Marimo workflow; do not launch long-running training locally. The exact model/config, split, seed, artifact, and upload target must be recorded in each run manifest.
+Use `/marimo/mmdet-venv/bin/python` for long-running jobs. Split seed is `42`; training runners use seeds `42,43,44`, 100 epochs, and patience `0` where the protocol supports those arguments. Runtime datasets, checkpoints, `work_dirs/`, caches, and generated reports are excluded.
 
-SR-TOD exposes `srtod_faster` and `srtod_cascade`; it is not an FCOS implementation. FCOS-SET is the separate comparison model.
+Run from the submission root so copied runners resolve the copied `mmdetection/` and project files locally.
