@@ -14,6 +14,6 @@ Datasets: Varroa, LEVIR-Ship, TinyPerson. Split seed: `42`. Dataset roots, check
 | SR-TOD | `train_srtod_mmdet.py`, `setup_srtod_datasets.py`, `srtod_setup/`, `SR-TOD/` |
 | Marimo connection | `utils/marimo_ops.py`, `docs/local_github_marimo_workflow.md` |
 
-Use the launchers under `train/` and `evaluate/`. Run MMDetection jobs with `/marimo/mmdet-venv/bin/python` through the repository Marimo workflow; do not launch long-running training locally. The exact model/config, split, seed, artifact, and upload target must be recorded in each run manifest.
+Submission Python entrypoints live in `train/*.py` and `evaluate/*.py`; each delegates to the canonical source above without duplicating the MMDetection base. Run them with `/marimo/mmdet-venv/bin/python` through the repository Marimo workflow; do not launch long-running training locally. The exact model/config, split, seed, artifact, and upload target must be recorded in each run manifest.
 
 SR-TOD exposes `srtod_faster` and `srtod_cascade`; it is not an FCOS implementation. FCOS-SET is the separate comparison model.
