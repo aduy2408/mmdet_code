@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Upload-required native AdamW HF DETR/RT-DETR matrix queue."""
 
+The matrix has 48 jobs in deterministic 1-based order:
+4 datasets x 2 augmentation variants x 2 models x 3 training seeds.
 from __future__ import annotations
 
 import argparse
@@ -33,10 +35,12 @@ MODELS = {
     "rtdetr_r18": {"model_id": "PekingU/rtdetr_r18vd", "backbone": "ResNet-18"},
 }
 REPO_ID = "duyle2408/detr_r18_rtdetr_r18_matrix_runs"
+SEEDS = (42, 43, 44)
 MAIN_LR = 1e-4
 BACKBONE_LR = 1e-5
 WEIGHT_DECAY = 1e-4
 WARMUP_STEPS = 500
+PATIENCE = 0
 
 
 def all_jobs() -> list[Job]:
