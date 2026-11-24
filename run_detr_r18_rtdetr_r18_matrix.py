@@ -29,10 +29,10 @@ DEFAULT_RTDETR_ROOT = "/marimo/rtdetr-mmdet"
 DEFAULT_HF_REPO = "duyle2408/detr_r18_rtdetr_r18_matrix_runs"
 MODELS = ("rtdetr_r18", "detr_r18")
 DATASETS = ("varroa", "levirship", "tinyperson", "visdrone")
-SEEDS = (42, 43)
+SEEDS = (42, 43, 44)
 SPLIT_SEED = 42
 EPOCHS = 100
-PATIENCE = 15
+PATIENCE = 0
 UPLOAD_INTERVAL_HOURS = 1.0
 
 
@@ -165,7 +165,7 @@ def worktree_dirty() -> str:
 
 def validate_args(args: argparse.Namespace) -> None:
     if args.epochs != EPOCHS or args.patience != PATIENCE or args.split_seed != SPLIT_SEED:
-        raise ValueError("Matrix contract requires epochs=100, patience=15, split_seed=42")
+        raise ValueError("Matrix contract requires epochs=100, patience=0, split_seed=42")
     if args.hf_repo_id != DEFAULT_HF_REPO:
         raise ValueError(f"Unexpected task-specific HF repository: {args.hf_repo_id}")
     if args.upload_interval_hours <= 0:
@@ -203,8 +203,8 @@ def common_args(job: Job, args: argparse.Namespace) -> list[str]:
     return [
         "--python", args.python,
         "--epochs", str(args.epochs),
+        "--patience", str(args.patience),
         "--split-seed", str(args.split_seed),
-        "--seed", str(job.seed),
         "--rtdetr-root", args.rtdetr_root,
         "--hf-repo-id", args.hf_repo_id,
         "--upload-interval-hours", str(args.upload_interval_hours),

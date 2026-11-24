@@ -41,7 +41,7 @@ def all_jobs() -> list[Job]:
         for dataset in DATASETS
         for variant in ("no_mosaic", "mosaic")
         for model in MODELS
-        for seed in (42, 43)
+        for seed in (42, 43, 44)
     ]
 
 
@@ -51,7 +51,7 @@ def parse_args():
     parser.add_argument("--work-root", default="/marimo/hf_runs/stability_matrix")
     parser.add_argument("--state-file", default="/marimo/hf_runs/stability_matrix/queue_state.json")
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--patience", type=int, default=0)
     parser.add_argument("--split-seed", type=int, default=42)
     return parser.parse_args()
 
@@ -76,7 +76,7 @@ def write_state(path: Path, server: int, jobs: list[Job], statuses: list[str], a
         "experiment": "hf_detr_r50_rtdetr_r18_matrix_stability_lr",
         "server": server,
         "epochs": 100,
-        "patience": 15,
+        "patience": 0,
         "split_seed": 42,
         "hf_repo_id": REPO_ID,
         "upload_required": True,

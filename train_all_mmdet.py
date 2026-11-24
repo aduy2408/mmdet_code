@@ -938,7 +938,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-mask-models", action="store_true")
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument("--machine-index", type=int, default=0)
-    parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--model-yaml", default="matrix", help="Explicit model mapping label for run contracts.")
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", "--workers", dest="num_workers", type=int, default=4)

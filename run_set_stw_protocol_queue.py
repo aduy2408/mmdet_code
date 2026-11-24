@@ -34,7 +34,7 @@ JOBS = (
         "work_dir": WORK / "levirship/no_mosaic",
         "variant": "no_mosaic",
         "image_size": 512,
-        "remote_prefix": "levirship/no_mosaic/seed42",
+        "remote_prefix": "levirship/no_mosaic",
     },
     {
         "name": "tinyperson_mosaic",
@@ -45,16 +45,16 @@ JOBS = (
         "work_dir": WORK / "tinyperson/mosaic",
         "variant": "mosaic",
         "image_size": 640,
-        "remote_prefix": "tinyperson/mosaic/seed42",
+        "remote_prefix": "tinyperson/mosaic",
     },
 )
 
 
-def write_manifest(job: dict[str, object]) -> Path:
-    out = Path(job["work_dir"]) / "setup_manifest.json"
+def write_manifest(job: dict[str, object], seed: int, work_dir: Path, remote_prefix: str) -> Path:
+    out = work_dir / "setup_manifest.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "experiment_id": f"set-stw-protocol-{job['name']}-seed42",
+        "experiment_id": f"set-stw-protocol-{job['name']}-seed{seed}",
         "baseline": {
             "control_config_or_baseline_config": str(
                 ROOT / "mmdetection/configs/set/fcos_r50_set.py"
@@ -73,19 +73,19 @@ def write_manifest(job: dict[str, object]) -> Path:
         "dataset_root": job["data_root"],
         "python_executable": PYTHON,
         "split_seed": 42,
-        "training_seed": 42,
+        "training_seed": seed,
         "model_backbone_pretrained_source": (
             "FCOS_set / ResNet-50 / torchvision://resnet50"
         ),
         "image_size": [job["image_size"], job["image_size"]],
         "batch_size": 8,
         "epochs": 100,
-        "patience": 15,
+        "patience": 0,
         "workers": 8,
         "amp": False,
         "optimizer": {
             "type": "MuSGD",
-            "lr": 0.01,
+            "lr": 0.0001,
             "momentum": 0.9,
             "nesterov": True,
             "weight_decay": 0.0005,
@@ -94,7 +94,7 @@ def write_manifest(job: dict[str, object]) -> Path:
         },
         "nms_iou": 0.5,
         "hf_repo": HF_REPO,
-        "remote_prefix": job["remote_prefix"],
+        "remote_prefix": remote_prefix,
         "required_artifacts": [
             "patched_config.py",
             "checkpoint",
@@ -106,8 +106,13 @@ def write_manifest(job: dict[str, object]) -> Path:
     out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     return out
 
-
-def command_for(job: dict[str, object]) -> list[str]:
+def command_for(
+    job: dict[str, object],
+    seed: int,
+    work_dir: Path,
+    dataset_out: Path,
+    remote_prefix: str,
+) -> list[str]:
     command = [
         PYTHON,
         str(ROOT / str(job["launcher"])),
@@ -116,7 +121,7 @@ def command_for(job: dict[str, object]) -> list[str]:
         "--data-root",
         str(job["data_root"]),
         "--work-dir",
-        str(job["work_dir"]),
+        str(work_dir),
         "--models",
         "fcos_set",
         "--model-yaml",
@@ -126,7 +131,7 @@ def command_for(job: dict[str, object]) -> list[str]:
         "--epochs",
         "100",
         "--patience",
-        "15",
+        "0",
         "--batch-size",
         "8",
         "--workers",
@@ -134,23 +139,24 @@ def command_for(job: dict[str, object]) -> list[str]:
         "--image-size",
         str(job["image_size"]),
         "--seed",
-        "42",
+        str(seed),
         "--split-seed",
         "42",
         "--hf-repo-id",
         HF_REPO,
         "--remote-prefix",
-        str(job["remote_prefix"]),
+        remote_prefix,
     ]
     if job["name"] == "levirship_no_mosaic":
-        command.extend(["--dataset-out", str(job["dataset_out"])])
+        command.extend(["--dataset-out", str(dataset_out)])
     else:
-        command.extend(["--prepared-ann-dir", str(job["dataset_out"])])
+        command.extend(["--prepared-ann-dir", str(dataset_out)])
     return command
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--seeds", type=int, nargs="+", default=[42, 43, 44])
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -164,14 +170,18 @@ def main() -> None:
     )
     env["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
 
-    for job in JOBS:
-        manifest = write_manifest(job)
-        command = command_for(job)
-        print(f"MANIFEST {manifest}")
-        print("RUN", " ".join(command), flush=True)
-        if not args.list and not args.dry_run:
-            subprocess.run(command, cwd=str(ROOT), env=env, check=True)
-            print(f"COMPLETED {job['name']}", flush=True)
+    for seed in args.seeds:
+        for job in JOBS:
+            work_dir = Path(job["work_dir"]) / f"seed_{seed}"
+            dataset_out = Path(job["dataset_out"]) / f"seed_{seed}"
+            remote_prefix = f"{job['remote_prefix']}/seed{seed}"
+            manifest = write_manifest(job, seed, work_dir, remote_prefix)
+            command = command_for(job, seed, work_dir, dataset_out, remote_prefix)
+            print(f"MANIFEST {manifest}")
+            print("RUN", " ".join(command), flush=True)
+            if not args.list and not args.dry_run:
+                subprocess.run(command, cwd=str(ROOT), env=env, check=True)
+                print(f"COMPLETED {job['name']}/seed_{seed}", flush=True)
 
 
 if __name__ == "__main__":

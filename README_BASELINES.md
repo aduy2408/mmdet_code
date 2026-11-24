@@ -91,8 +91,9 @@ subprocess.run([
     "/marimo/mmdet-venv/bin/python",
     "/marimo/mmdet_code/run_two_server_baselines.py",
     "--machine", "1",
-    "--epochs", "12",
-    "--amp",
+    "--epochs", "100",
+    "--seeds", "42", "43", "44",
+    "--patience", "0",
 ], check=True)
 ```
 
@@ -103,8 +104,9 @@ subprocess.run([
     "/marimo/mmdet-venv/bin/python",
     "/marimo/mmdet_code/run_two_server_baselines.py",
     "--machine", "2",
-    "--epochs", "12",
-    "--amp",
+    "--epochs", "100",
+    "--seeds", "42", "43", "44",
+    "--patience", "0",
 ], check=True)
 ```
 
@@ -115,10 +117,10 @@ To run the transformer baselines directly, use one launcher per dataset:
 
 ```bash
 /marimo/mmdet-venv/bin/python /marimo/mmdet_code/train_all_tinyperson_baseline.py \
-  --models detr,dino --epochs 12 --amp
+  --models detr,dino --epochs 100 --patience 0
 
 /marimo/mmdet-venv/bin/python /marimo/mmdet_code/train_all_levir_baseline.py \
-  --models detr,dino --epochs 12 --amp --no-hf-upload
+  --models detr,dino --epochs 100 --patience 0 --no-hf-upload
 ```
 
 Run the same commands with `--dry-run` first to prepare and inspect the patched
@@ -182,7 +184,7 @@ and filter pipeline, MuSGD, 100 epochs, batch size 8, and 8 workers. The
   --models fcos \
   --variants base \
   --yolo-protocol no_mosaic \
-  --epochs 100 --early-stop-patience 15 \
+  --epochs 100 --early-stop-patience 0 \
   --batch-size 8 --num-workers 8 --img-scale 640 640 \
   --split-seed 42 --seed 42 \
   --python /marimo/mmdet-venv/bin/python \

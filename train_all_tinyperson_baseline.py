@@ -561,8 +561,8 @@ def parse_args() -> argparse.Namespace:
             "cascade_rcnn, rtmdet, detr, dino."
         ),
     )
-    parser.add_argument("--epochs", type=int, default=12)
-    parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--patience", type=int, default=0)
     parser.add_argument("--variant", choices=("mosaic", "no_mosaic"), default="mosaic")
     parser.add_argument(
         "--image-size", type=int, default=640,

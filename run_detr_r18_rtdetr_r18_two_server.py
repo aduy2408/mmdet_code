@@ -2,7 +2,7 @@
 """Run the DETR-R18 and RT-DETR-R18 matrix across two Marimo servers.
 
 The runner is itself launched detached through ``utils.marimo_ops launch``.
-Each server receives a deterministic shard of the 4 datasets x 2 models x 2
+Each server receives a deterministic shard of the 4 datasets x 2 models x 3
 training seeds matrix. The dataset launchers perform hourly snapshots and final
 Hugging Face verification for each job.
 """
@@ -22,10 +22,10 @@ PYTHON = "/marimo/mmdet-venv/bin/python"
 RTDETR_ROOT = "/marimo/rtdetr-mmdet"
 # Recovery order: validate RT-DETR first, then run the DETR jobs that follow it.
 MODELS = ("rtdetr_r18", "detr_r18")
-SEEDS = (42, 43)
+SEEDS = (42, 43, 44)
 SPLIT_SEED = 42
 EPOCHS = 100
-PATIENCE = 15
+PATIENCE = 0
 UPLOAD_INTERVAL_HOURS = 1.0
 
 

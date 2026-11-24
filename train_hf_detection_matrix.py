@@ -176,7 +176,7 @@ def parse_args():
     parser.add_argument("--split-seed", type=int, default=42)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--patience", type=int, default=15)
+    parser.add_argument("--patience", type=int, default=0)
     parser.add_argument("--image-size", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=0)
     parser.add_argument("--workers", type=int, default=-1)

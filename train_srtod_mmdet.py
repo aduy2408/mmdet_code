@@ -756,7 +756,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--models", default="default", help="'default' or comma-separated model names.")
     parser.add_argument("--num-machines", type=int, default=1)
     parser.add_argument("--machine-index", type=int, default=0)
-    parser.add_argument("--epochs", type=int, default=12)
+    parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", "--workers", dest="num_workers", type=int, default=4)
     parser.add_argument("--lr", type=float, default=None, help="Override config optimizer lr; default keeps SR-TOD config.")
